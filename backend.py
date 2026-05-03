@@ -32,7 +32,7 @@ def call_claude(prompt, system="", max_tokens=1000):
             "anthropic-version": "2023-06-01",
         },
         json={
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-sonnet-4-5",
             "max_tokens": max_tokens,
             "system": system or "You are an expert career advisor for European tech expat roles.",
             "messages": [{"role": "user", "content": prompt}],
