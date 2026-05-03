@@ -105,7 +105,12 @@ def search():
     if "eurotechjobs" in sources: jobs += scrape_eurotechjobs(kw)
     if "arbeitnow" in sources: jobs += fetch_arbeitnow(kw)
     if "remotive" in sources: jobs += fetch_remotive(kw)
-    if "adzuna" in sources: jobs += fetch_adzuna(kw, b.get("adzuna_app_id",""), b.get("adzuna_app_key",""))
+    if "adzuna" in sources:
+    jobs += fetch_adzuna(
+        kw,
+        b.get("adzuna_app_id","") or os.environ.get("ADZUNA_APP_ID",""),
+        b.get("adzuna_app_key","") or os.environ.get("ADZUNA_APP_KEY","")
+    )
     jobs = dedup(jobs)
     for j in jobs: j["match"] = score_job(j, prof)
     jobs.sort(key=lambda j: j["match"], reverse=True)
