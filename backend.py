@@ -124,9 +124,9 @@ def parse_resume():
 {{"name":"","email":"","phone":"","title":"","summary":"one sentence","experience_years":0,"skills":[],"experience":[{{"company":"","role":"","duration":"","bullets":[]}}],"education":"","certifications":[],"languages":[]}}
 
 RESUME:
-{resume_text[:2000]}''',
+{resume_text[:5000]}''',
             "Return ONLY the filled JSON object. No markdown. No explanation. Keep all string values concise.",
-            1200
+            1500
         )
         cleaned = result.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(cleaned)
@@ -192,9 +192,9 @@ def parse_resume():
 {{"name":"","email":"","phone":"","title":"","summary":"one sentence","experience_years":0,"skills":[],"experience":[{{"company":"","role":"","duration":"","bullets":[]}}],"education":"","certifications":[],"languages":[]}}
 
 RESUME:
-{resume_text[:2500]}''',
+{resume_text[:5000]}''',
             "Return ONLY the filled JSON object. No markdown. No explanation. Keep all string values concise.",
-            1200
+            1500
         )
         cleaned = result.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(cleaned)
