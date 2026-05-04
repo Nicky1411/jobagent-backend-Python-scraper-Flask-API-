@@ -2,7 +2,7 @@
 JobAgent EU - Backend with Claude API proxy
 Handles: job scraping, Claude API calls (parse, cover letter, resume rewrite)
 """
-import time, re, logging, os
+import time, re, logging, os, json, tempfile
 from datetime import datetime
 from urllib.parse import quote_plus
 from flask import Flask, jsonify, request
@@ -32,7 +32,7 @@ def call_claude(prompt, system="", max_tokens=1000):
             "anthropic-version": "2023-06-01",
         },
         json={
-            "model": "claude-sonnet-4-5",
+            "model": "claude-sonnet-4-20250514",
             "max_tokens": max_tokens,
             "system": system or "You are an expert career advisor for European tech expat roles.",
             "messages": [{"role": "user", "content": prompt}],
@@ -129,9 +129,76 @@ RESUME:
             1200
         )
         cleaned = result.replace("```json", "").replace("```", "").strip()
-        import json
         parsed = json.loads(cleaned)
         return jsonify({"success": True, "profile": parsed})
+    except Exception as e:
+        log.error(f"Parse error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+def extract_text_from_file(file_bytes, filename):
+    """Extract plain text from PDF or DOCX file bytes."""
+    ext = filename.lower().split(".")[-1]
+    text = ""
+    if ext == "pdf":
+        try:
+            import fitz  # PyMuPDF
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                text = "\n".join(page.get_text() for page in doc)
+        except Exception as e:
+            raise Exception(f"Could not read PDF: {e}")
+    elif ext in ["docx", "doc"]:
+        try:
+            from docx import Document
+            from io import BytesIO
+            doc = Document(BytesIO(file_bytes))
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        except Exception as e:
+            raise Exception(f"Could not read Word file: {e}")
+    elif ext == "txt":
+        text = file_bytes.decode("utf-8", errors="ignore")
+    else:
+        raise Exception(f"Unsupported file type: {ext}. Please upload PDF, DOCX, or TXT.")
+    return text.strip()
+
+
+@app.route("/parse", methods=["POST"])
+def parse_resume():
+    """Parse resume from text OR uploaded file using Claude API."""
+    resume_text = ""
+
+    # Handle file upload
+    if "file" in request.files:
+        f = request.files["file"]
+        filename = f.filename or "resume"
+        try:
+            file_bytes = f.read()
+            resume_text = extract_text_from_file(file_bytes, filename)
+            log.info(f"Extracted {len(resume_text)} chars from {filename}")
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
+    # Handle JSON text
+    elif request.is_json:
+        body = request.get_json() or {}
+        resume_text = body.get("text", "").strip()
+
+    if not resume_text or len(resume_text) < 20:
+        return jsonify({"error": "Could not extract text from file. Please try a different format or paste the text manually."}), 400
+
+    try:
+        result = call_claude(
+            f'''Extract info from this resume. Return ONLY a JSON object. Keep values concise.
+
+{{"name":"","email":"","phone":"","title":"","summary":"one sentence","experience_years":0,"skills":[],"experience":[{{"company":"","role":"","duration":"","bullets":[]}}],"education":"","certifications":[],"languages":[]}}
+
+RESUME:
+{resume_text[:2500]}''',
+            "Return ONLY the filled JSON object. No markdown. No explanation. Keep all string values concise.",
+            1200
+        )
+        cleaned = result.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(cleaned)
+        return jsonify({"success": True, "profile": parsed, "extracted_chars": len(resume_text)})
     except Exception as e:
         log.error(f"Parse error: {e}")
         return jsonify({"error": str(e)}), 500
