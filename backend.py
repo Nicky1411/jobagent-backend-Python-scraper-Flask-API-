@@ -32,7 +32,7 @@ def call_claude(prompt, system="", max_tokens=1000):
             "anthropic-version": "2023-06-01",
         },
         json={
-            "model": "claude-sonnet-4-5",
+            "model": "claude-sonnet-4-20250514",
             "max_tokens": max_tokens,
             "system": system or "You are an expert career advisor for European tech expat roles.",
             "messages": [{"role": "user", "content": prompt}],
@@ -50,8 +50,11 @@ def fetch_arbeitnow(keywords):
         r = requests.get("https://www.arbeitnow.com/api/job-board-api", headers=HEADERS, timeout=15)
         if r.status_code != 200: return []
         kw = keywords.lower().split()
+        # Broader matching — include jobs if ANY skill matches OR title has data/engineer
+        broad_kw = kw + ["data", "engineer", "cloud", "infrastructure", "platform", "support", "hadoop", "spark", "linux"]
         for job in r.json().get("data", []):
-            if any(k in f"{job.get('title','')} {job.get('description','')}".lower() for k in kw):
+            job_text = f"{job.get('title','')} {job.get('description','')}".lower()
+            if any(k in job_text for k in broad_kw):
                 results.append({"id": f"arb_{job.get('slug', len(results))}", "title": job.get("title", ""), "company": job.get("company_name", ""), "location": job.get("location", "Europe"), "salary": "Competitive", "url": job.get("url", ""), "source": "Arbeitnow", "tags": job.get("tags", [])[:4] + (["Visa Sponsor"] if job.get("visa_sponsored") else []), "posted": "Recently", "description": job.get("description", "")[:400], "match": 0})
     except Exception as e:
         log.error(f"Arbeitnow: {e}")
@@ -85,17 +88,45 @@ def extract_tags(text):
     return [t for t in ["Cloudera","Hadoop","Spark","Hive","HDFS","Kafka","CDP","CDH","Python","Linux","English","Visa","Relocation","Big Data","AWS","Azure"] if t.lower() in text.lower()][:5]
 
 def score_job(job, profile):
-    score = 50
+    score = 40
     skills = [s.lower() for s in profile.get("skills", [])]
     title = job["title"].lower()
     body = (job.get("description", "") + " ".join(job.get("tags", []))).lower()
-    for kw in ["support", "engineer", "data", "platform", "cloudera", "hadoop", "senior"]:
-        if kw in title: score += 5
-    for s in skills:
-        if s in body or s in title: score += 4
-    if any(t in ["Visa Sponsor", "Relocation Package"] for t in job.get("tags", [])): score += 8
-    if any(t in ["English Only", "English Friendly"] for t in job.get("tags", [])): score += 6
-    return min(score, 99)
+    combined = title + " " + body
+
+    # Strong positive — data/infrastructure keywords in title
+    for kw in ["hadoop", "cloudera", "hive", "spark", "hdfs", "kafka", "cdp", "cdh",
+               "big data", "data platform", "data infrastructure", "data engineer",
+               "data support", "platform engineer", "infrastructure engineer"]:
+        if kw in title: score += 12
+        elif kw in body: score += 4
+
+    # Moderate positive — general data/cloud keywords
+    for kw in ["data", "cloud", "aws", "azure", "gcp", "linux", "python",
+               "support", "senior", "engineer", "devops", "kubernetes", "docker"]:
+        if kw in title: score += 4
+
+    # Skills overlap — strong signal
+    matched_skills = sum(1 for s in skills if s.lower() in combined)
+    score += matched_skills * 5
+
+    # Location bonus — EU preferred
+    location = job.get("location", "").lower()
+    for loc in ["netherlands", "germany", "amsterdam", "berlin", "europe", "remote"]:
+        if loc in location: score += 6; break
+
+    # Visa/relocation bonus
+    if any(t in ["Visa Sponsor", "Relocation Package", "Visa Sponsorship"] for t in job.get("tags", [])): score += 10
+    if any(t in ["English Only", "English Friendly", "English OK"] for t in job.get("tags", [])): score += 8
+
+    # Penalize clearly unrelated roles
+    unrelated = ["frontend", "react", "vue", "angular", "ios", "android", "mobile",
+                 "php", "ruby", "rails", "wordpress", "ui/ux", "designer", "graphic",
+                 "sales", "marketing", "accountant", "hr ", "recruiter"]
+    for kw in unrelated:
+        if kw in title: score -= 25
+
+    return max(0, min(score, 99))
 
 def dedup(jobs):
     seen, out = set(), []
@@ -109,6 +140,31 @@ def dedup(jobs):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "claude": bool(ANTHROPIC_KEY), "ts": datetime.now().isoformat()})
+
+@app.route("/parse", methods=["POST"])
+def parse_resume():
+    """Parse resume text using Claude API server-side."""
+    body = request.get_json() or {}
+    resume_text = body.get("text", "").strip()
+    if not resume_text:
+        return jsonify({"error": "No resume text provided"}), 400
+    try:
+        result = call_claude(
+            f'''Extract info from this resume. Return ONLY a JSON object. Keep values concise.
+
+{{"name":"","email":"","phone":"","title":"","summary":"one sentence","experience_years":0,"skills":[],"experience":[{{"company":"","role":"","duration":"","bullets":[]}}],"education":"","certifications":[],"languages":[]}}
+
+RESUME:
+{resume_text[:2000]}''',
+            "Return ONLY the filled JSON object. No markdown. No explanation. Keep all string values concise.",
+            1200
+        )
+        cleaned = result.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(cleaned)
+        return jsonify({"success": True, "profile": parsed})
+    except Exception as e:
+        log.error(f"Parse error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def extract_text_from_file(file_bytes, filename):
     """Extract plain text from PDF or DOCX file bytes."""
@@ -167,9 +223,9 @@ def parse_resume():
 {{"name":"","email":"","phone":"","title":"","summary":"one sentence","experience_years":0,"skills":[],"experience":[{{"company":"","role":"","duration":"","bullets":[]}}],"education":"","certifications":[],"languages":[]}}
 
 RESUME:
-{resume_text[:5000]}''',
+{resume_text[:2500]}''',
             "Return ONLY the filled JSON object. No markdown. No explanation. Keep all string values concise.",
-            1500
+            1200
         )
         cleaned = result.replace("```json", "").replace("```", "").strip()
         parsed = json.loads(cleaned)
@@ -223,10 +279,17 @@ def search_jobs():
     prof = b.get("profile", {})
     sources = b.get("sources", ["arbeitnow", "remotive"])
     jobs = []
-    if "arbeitnow" in sources: jobs += fetch_arbeitnow(kw)
-    if "remotive" in sources: jobs += fetch_remotive(kw)
+    # Search with original keywords + broader fallback terms
+    kw_broad = "big data engineer europe english"
+    if "arbeitnow" in sources:
+        jobs += fetch_arbeitnow(kw)
+        if len(jobs) < 5: jobs += fetch_arbeitnow(kw_broad)
+    if "remotive" in sources:
+        jobs += fetch_remotive(kw)
+        if len(jobs) < 5: jobs += fetch_remotive("data engineer")
     if "adzuna" in sources:
         jobs += fetch_adzuna(kw, b.get("adzuna_app_id", "") or os.environ.get("ADZUNA_APP_ID", ""), b.get("adzuna_app_key", "") or os.environ.get("ADZUNA_APP_KEY", ""))
+        jobs += fetch_adzuna("hadoop data engineer", b.get("adzuna_app_id", "") or os.environ.get("ADZUNA_APP_ID", ""), b.get("adzuna_app_key", "") or os.environ.get("ADZUNA_APP_KEY", ""))
     jobs = dedup(jobs)
     for j in jobs: j["match"] = score_job(j, prof)
     jobs.sort(key=lambda j: j["match"], reverse=True)
