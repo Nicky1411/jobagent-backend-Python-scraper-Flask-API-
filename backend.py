@@ -110,31 +110,6 @@ def dedup(jobs):
 def health():
     return jsonify({"status": "ok", "claude": bool(ANTHROPIC_KEY), "ts": datetime.now().isoformat()})
 
-@app.route("/parse", methods=["POST"])
-def parse_resume():
-    """Parse resume text using Claude API server-side."""
-    body = request.get_json() or {}
-    resume_text = body.get("text", "").strip()
-    if not resume_text:
-        return jsonify({"error": "No resume text provided"}), 400
-    try:
-        result = call_claude(
-            f'''Extract info from this resume. Return ONLY a JSON object. Keep values concise.
-
-{{"name":"","email":"","phone":"","title":"","summary":"one sentence","experience_years":0,"skills":[],"experience":[{{"company":"","role":"","duration":"","bullets":[]}}],"education":"","certifications":[],"languages":[]}}
-
-RESUME:
-{resume_text[:5000]}''',
-            "Return ONLY the filled JSON object. No markdown. No explanation. Keep all string values concise.",
-            1500
-        )
-        cleaned = result.replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(cleaned)
-        return jsonify({"success": True, "profile": parsed})
-    except Exception as e:
-        log.error(f"Parse error: {e}")
-        return jsonify({"error": str(e)}), 500
-
 def extract_text_from_file(file_bytes, filename):
     """Extract plain text from PDF or DOCX file bytes."""
     ext = filename.lower().split(".")[-1]
