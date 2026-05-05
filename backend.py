@@ -78,22 +78,40 @@ def fetch_adzuna(keywords, app_id="", app_key=""):
     return results
 
 def score_job(job, profile):
-    score = 40
+    """Generic relevance scoring — works for any profession."""
+    score = 30
     skills = [s.lower() for s in profile.get("skills", [])]
+    profile_title = (profile.get("title") or "").lower()
     title = job["title"].lower()
     combined = title + " " + (job.get("description","") + " ".join(job.get("tags",[]))).lower()
-    for kw in ["hadoop","cloudera","hive","spark","hdfs","kafka","cdp","cdh","big data","data platform","data infrastructure","data engineer","platform engineer"]:
-        if kw in title: score += 12
-        elif kw in combined: score += 4
-    for kw in ["data","cloud","aws","azure","gcp","linux","python","support","senior","engineer","kubernetes","docker"]:
-        if kw in title: score += 4
-    score += sum(1 for s in skills if s.lower() in combined) * 5
+
+    # Skill overlap — core signal, works for any profession
+    matched = sum(1 for s in skills if len(s) > 3 and s.lower() in combined)
+    score += min(matched * 6, 40)
+
+    # Title word overlap with profile title
+    title_words = set(title.split())
+    profile_words = set(profile_title.split())
+    score += len(title_words & profile_words) * 5
+
+    # Seniority match
+    for level in ["senior","lead","principal","staff","head","director","manager"]:
+        if level in profile_title and level in title: score += 8; break
+        elif level in profile_title and level not in title: score -= 3
+
+    # Experience years bonus
+    exp = profile.get("experience_years", 0)
+    if exp >= 5 and any(w in title for w in ["junior","intern","graduate","entry"]): score -= 20
+    elif exp >= 4: score += 4
+
+    # Location bonus — expat friendly
     location = job.get("location","").lower()
-    if any(loc in location for loc in ["netherlands","germany","amsterdam","berlin","europe","remote"]): score += 6
-    if any(t in ["Visa Sponsor","Relocation Package"] for t in job.get("tags",[])): score += 10
-    if any(t in ["English Only","English Friendly"] for t in job.get("tags",[])): score += 8
-    for kw in ["frontend","react","vue","angular","ios","android","php","ruby","rails","wordpress","designer","sales","marketing","recruiter"]:
-        if kw in title: score -= 25
+    if any(loc in location for loc in ["netherlands","germany","amsterdam","berlin","munich","hamburg","stockholm","europe","remote","worldwide"]): score += 8
+
+    # Visa/relocation bonus — critical for expats
+    if any(t in ["Visa Sponsor","Relocation Package","Visa Sponsorship"] for t in job.get("tags",[])): score += 12
+    if any(t in ["English Only","English Friendly","English OK"] for t in job.get("tags",[])): score += 10
+
     return max(0, min(score, 99))
 
 def dedup(jobs):
@@ -154,16 +172,21 @@ def search_jobs():
     sources = b.get("sources",["arbeitnow","remotive"])
     aid = b.get("adzuna_app_id","") or os.environ.get("ADZUNA_APP_ID","")
     akey = b.get("adzuna_app_key","") or os.environ.get("ADZUNA_APP_KEY","")
+    # Build fallback keywords from profile title if available
+    profile_title = (prof.get("title") or "").strip()
+    top_skills = " ".join(prof.get("skills", [])[:2])
+    fallback_kw = f"{profile_title} {top_skills}".strip() or "senior engineer europe"
+
     jobs = []
     if "arbeitnow" in sources:
         jobs += fetch_arbeitnow(kw)
-        if len(jobs) < 5: jobs += fetch_arbeitnow("big data engineer europe")
+        if len(jobs) < 8: jobs += fetch_arbeitnow(fallback_kw)
     if "remotive" in sources:
         jobs += fetch_remotive(kw)
-        if len(jobs) < 5: jobs += fetch_remotive("data engineer")
+        if len(jobs) < 8: jobs += fetch_remotive(profile_title or "senior engineer")
     if "adzuna" in sources:
         jobs += fetch_adzuna(kw, aid, akey)
-        jobs += fetch_adzuna("hadoop data engineer", aid, akey)
+        if profile_title: jobs += fetch_adzuna(profile_title, aid, akey)
     jobs = dedup(jobs)
     for j in jobs: j["match"] = score_job(j, prof)
     jobs.sort(key=lambda j: j["match"], reverse=True)
