@@ -400,6 +400,8 @@ def generate_content():
 
 @app.route("/search", methods=["POST"])
 def search_jobs():
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+
     b = request.get_json() or {}
     kw = b.get("keywords","senior engineer europe")
     prof = b.get("profile",{})
@@ -410,42 +412,47 @@ def search_jobs():
     # Build smart fallback keywords from profile
     profile_title = (prof.get("title") or "").strip()
     top_skills = " ".join(prof.get("skills",[])[:2])
-    fallback_kw = f"{profile_title} {top_skills}".strip() or "senior engineer europe"
+    fallback_kw = f"{profile_title} {top_skills}".strip() or kw
 
-    jobs = []
+    # Define all fetch tasks
+    tasks = []
     if "arbeitnow" in sources:
-        jobs += fetch_arbeitnow(kw)
-        if len(jobs) < 8: jobs += fetch_arbeitnow(fallback_kw)
-
+        tasks.append(("arbeitnow_main", lambda: fetch_arbeitnow(kw)))
+        tasks.append(("arbeitnow_fallback", lambda: fetch_arbeitnow(fallback_kw)))
     if "remotive" in sources:
-        jobs += fetch_remotive(kw)
-        if len(jobs) < 8: jobs += fetch_remotive(profile_title or "senior engineer")
-
+        tasks.append(("remotive_main", lambda: fetch_remotive(kw)))
+        tasks.append(("remotive_fallback", lambda: fetch_remotive(profile_title or "senior engineer")))
     if "adzuna" in sources and aid and akey:
-        jobs += fetch_adzuna(kw, aid, akey)
-        if profile_title: jobs += fetch_adzuna(profile_title, aid, akey)
-
+        tasks.append(("adzuna_main", lambda: fetch_adzuna(kw, aid, akey)))
+        if profile_title:
+            tasks.append(("adzuna_title", lambda: fetch_adzuna(profile_title, aid, akey)))
     if "weworkremotely" in sources:
-        jobs += fetch_weworkremotely(kw)
-        if len(jobs) < 10: jobs += fetch_weworkremotely(profile_title or kw)
-
+        tasks.append(("wwr", lambda: fetch_weworkremotely(kw)))
     if "themuse" in sources:
-        jobs += fetch_themuse(kw)
-        if len(jobs) < 10: jobs += fetch_themuse(profile_title or kw)
-
+        tasks.append(("themuse", lambda: fetch_themuse(kw)))
     if "stepstone" in sources:
-        jobs += fetch_stepstone(kw)
-        if profile_title and profile_title.lower() != kw.lower():
-            jobs += fetch_stepstone(profile_title)
-
+        tasks.append(("stepstone", lambda: fetch_stepstone(kw)))
     if "bundesagentur" in sources:
-        jobs += fetch_bundesagentur(kw)
+        tasks.append(("bundesagentur", lambda: fetch_bundesagentur(kw)))
 
-    jobs = dedup(jobs)
-    for j in jobs: j["match"] = score_job(j, prof)
-    jobs.sort(key=lambda j: j["match"], reverse=True)
-    log.info(f"Total: {len(jobs)} jobs from {len(sources)} sources")
-    return jsonify({"jobs": jobs, "total": len(jobs), "sources_used": sources})
+    # Run all tasks in parallel with 20s timeout each
+    all_jobs = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_map = {executor.submit(fn): name for name, fn in tasks}
+        for future in as_completed(future_map, timeout=25):
+            name = future_map[future]
+            try:
+                result = future.result(timeout=5)
+                all_jobs += result
+                log.info(f"{name}: {len(result)} jobs")
+            except Exception as e:
+                log.warning(f"{name} failed: {e}")
+
+    all_jobs = dedup(all_jobs)
+    for j in all_jobs: j["match"] = score_job(j, prof)
+    all_jobs.sort(key=lambda j: j["match"], reverse=True)
+    log.info(f"Total: {len(all_jobs)} jobs from {len(sources)} sources")
+    return jsonify({"jobs": all_jobs, "total": len(all_jobs), "sources_used": sources})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
