@@ -566,22 +566,26 @@ def run_agent():
         """Generate cover letter or tailored resume."""
         try:
             if content_type == "cover":
-                return call_claude(
-                    f"Write a 3-paragraph cover letter for:
-Job: {job.get('title')} at {job.get('company')}
-Description: {job.get('description','')[:300]}
-Candidate: {prof.get('title')}, {prof.get('experience_years')} yrs, Skills: {', '.join(prof.get('skills',[])[:8])}",
-                    "Expert cover letter writer. Professional, warm, English only.", 600)
+                prompt = (
+                    "Write a 3-paragraph cover letter for:\n"
+                    "Job: " + job.get("title","") + " at " + job.get("company","") + ", " + job.get("location","") + "\n"
+                    "Description: " + job.get("description","")[:300] + "\n"
+                    "Candidate: " + (prof.get("title") or "") + ", " + str(prof.get("experience_years",0)) + " yrs, "
+                    "Skills: " + ", ".join(prof.get("skills",[])[:8]) + "\n"
+                    "Tone: professional, warm, English only. End with availability to interview."
+                )
+                return call_claude(prompt, "Expert cover letter writer.", 600)
             else:
-                return call_claude(
-                    f"Tailor resume for:
-Job: {job.get('title')} at {job.get('company')}
-Description: {job.get('description','')[:200]}
-Candidate: {prof.get('title')}, Skills: {', '.join(prof.get('skills',[])[:10])}
-Output: Summary + Skills + Rewritten bullets",
-                    "Expert resume writer. Concise and keyword-rich.", 800)
+                prompt = (
+                    "Tailor this resume for the job.\n"
+                    "Job: " + job.get("title","") + " at " + job.get("company","") + "\n"
+                    "Description: " + job.get("description","")[:200] + "\n"
+                    "Candidate: " + (prof.get("title") or "") + ", Skills: " + ", ".join(prof.get("skills",[])[:10]) + "\n"
+                    "Output: 1) Summary 2) Top 8 skills 3) Rewritten bullets"
+                )
+                return call_claude(prompt, "Expert resume writer. Concise and keyword-rich.", 800)
         except Exception as e:
-            return f"Error generating {content_type}: {e}"
+            return "Error generating " + content_type + ": " + str(e)
 
     try:
         agent = JobAgent(call_claude, search_fn, generate_fn)
