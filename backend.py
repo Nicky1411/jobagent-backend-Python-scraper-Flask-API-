@@ -338,6 +338,61 @@ def score_job(job, profile):
 
     return max(0, min(score, 99))
 
+
+def claude_score_jobs(jobs, profile):
+    """
+    Use Claude to intelligently re-score top 15 jobs.
+    Much more accurate than keyword matching — understands context,
+    transferable skills, seniority, and industry fit.
+    """
+    if not jobs or not profile.get("name"):
+        return jobs
+
+    to_score = jobs[:15]
+    rest = jobs[15:]
+
+    profile_summary = f"""Title: {profile.get('title','')}
+Experience: {profile.get('experience_years',0)} years
+Skills: {', '.join(profile.get('skills',[])[:12])}
+Summary: {profile.get('summary','')}"""
+
+    jobs_text = ""
+    for i, job in enumerate(to_score):
+        jobs_text += f"JOB {i+1}: {job['title']} at {job['company']}, {job['location']}. {job.get('description','')[:150]}\n---\n"
+
+    try:
+        result = call_claude(
+            f"""Score how well this candidate matches each job. Return ONLY a JSON array of {len(to_score)} objects.
+
+CANDIDATE:
+{profile_summary}
+
+JOBS:
+{jobs_text}
+
+Return exactly:
+[{{"score": 85, "reason": "Strong skills match", "highlight": "3 exact skill matches"}}, ...]
+
+Rules:
+- score 0-99 (85+=excellent, 70-84=good, 50-69=partial, <50=poor)
+- Be strict — 85+ only for genuinely strong matches
+- Consider skills, seniority, industry, location""",
+            "Expert recruiter. Score job-candidate fit. Return ONLY valid JSON array. No markdown.",
+            600
+        )
+        cleaned = result.replace("```json","").replace("```","").strip()
+        scores = json.loads(cleaned)
+        for i, job in enumerate(to_score):
+            if i < len(scores):
+                s = scores[i]
+                job["match"] = max(0, min(int(s.get("score", job["match"])), 99))
+                job["match_reason"] = s.get("reason", "")
+                job["match_highlight"] = s.get("highlight", "")
+        log.info(f"Claude scored {len(to_score)} jobs")
+    except Exception as e:
+        log.error(f"Claude scoring error: {e}")
+    return to_score + rest
+
 def dedup(jobs):
     seen, out = set(), []
     for j in jobs:
@@ -449,10 +504,101 @@ def search_jobs():
                 log.warning(f"{name} failed: {e}")
 
     all_jobs = dedup(all_jobs)
+
+    # Step 1: Fast keyword scoring for all jobs
     for j in all_jobs: j["match"] = score_job(j, prof)
     all_jobs.sort(key=lambda j: j["match"], reverse=True)
-    log.info(f"Total: {len(all_jobs)} jobs from {len(sources)} sources")
+
+    # Step 2: Claude re-scores top 15 for accuracy (async-style — done after initial sort)
+    if prof.get("name"):
+        all_jobs = claude_score_jobs(all_jobs, prof)
+        all_jobs.sort(key=lambda j: j["match"], reverse=True)
+
+    log.info(f"Total: {len(all_jobs)} jobs, Claude-scored top {min(15,len(all_jobs))}")
     return jsonify({"jobs": all_jobs, "total": len(all_jobs), "sources_used": sources})
+
+
+# ── AGENT ROUTE ──────────────────────────────────────
+@app.route("/agent/run", methods=["POST"])
+def run_agent():
+    """
+    Run the true agentic loop.
+    Claude perceives state, reasons about actions, uses tools autonomously.
+    """
+    from agent import JobAgent
+
+    body = request.get_json() or {}
+    profile = body.get("profile", {})
+    saved_state = body.get("state", {})
+    sources = body.get("sources", ["arbeitnow","remotive","weworkremotely","themuse","adzuna"])
+    aid = body.get("adzuna_app_id","") or os.environ.get("ADZUNA_APP_ID","")
+    akey = body.get("adzuna_app_key","") or os.environ.get("ADZUNA_APP_KEY","")
+
+    if not profile.get("name"):
+        return jsonify({"error": "Profile required. Parse resume first."}), 400
+
+    # Wire up tool functions for the agent
+    def search_fn(keywords, srcs):
+        """Search wrapper for agent tool calls."""
+        jobs = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        tasks = []
+        if "arbeitnow" in srcs: tasks.append(lambda: fetch_arbeitnow(keywords))
+        if "remotive" in srcs: tasks.append(lambda: fetch_remotive(keywords))
+        if "weworkremotely" in srcs: tasks.append(lambda: fetch_weworkremotely(keywords))
+        if "themuse" in srcs: tasks.append(lambda: fetch_themuse(keywords))
+        if "stepstone" in srcs: tasks.append(lambda: fetch_stepstone(keywords))
+        if "adzuna" in srcs and aid and akey: tasks.append(lambda: fetch_adzuna(keywords, aid, akey))
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futures = [ex.submit(t) for t in tasks]
+            for f in as_completed(futures, timeout=20):
+                try: jobs += f.result(timeout=5)
+                except: pass
+        jobs = dedup(jobs)
+        for j in jobs: j["match"] = score_job(j, profile)
+        jobs.sort(key=lambda j: j["match"], reverse=True)
+        # Claude re-score top 15
+        jobs = claude_score_jobs(jobs, profile)
+        jobs.sort(key=lambda j: j["match"], reverse=True)
+        return jobs
+
+    def generate_fn(content_type, job, prof):
+        """Generate cover letter or tailored resume."""
+        try:
+            if content_type == "cover":
+                return call_claude(
+                    f"Write a 3-paragraph cover letter for:
+Job: {job.get('title')} at {job.get('company')}
+Description: {job.get('description','')[:300]}
+Candidate: {prof.get('title')}, {prof.get('experience_years')} yrs, Skills: {', '.join(prof.get('skills',[])[:8])}",
+                    "Expert cover letter writer. Professional, warm, English only.", 600)
+            else:
+                return call_claude(
+                    f"Tailor resume for:
+Job: {job.get('title')} at {job.get('company')}
+Description: {job.get('description','')[:200]}
+Candidate: {prof.get('title')}, Skills: {', '.join(prof.get('skills',[])[:10])}
+Output: Summary + Skills + Rewritten bullets",
+                    "Expert resume writer. Concise and keyword-rich.", 800)
+        except Exception as e:
+            return f"Error generating {content_type}: {e}"
+
+    try:
+        agent = JobAgent(call_claude, search_fn, generate_fn)
+        result = agent.run(profile, saved_state)
+        log.info(f"Agent run complete: {result.get('applied_count',0)} applied, {len(result.get('pending_approval',[]))} pending")
+        return jsonify(result)
+    except Exception as e:
+        log.error(f"Agent error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/agent/approve", methods=["POST"])
+def approve_job():
+    """Human approves or rejects a pending job."""
+    body = request.get_json() or {}
+    # This just signals approval — the frontend handles state
+    return jsonify({"status": "ok", "job_id": body.get("job_id"), "approved": body.get("approved", True)})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
