@@ -525,7 +525,11 @@ def run_agent():
     Run the true agentic loop.
     Claude perceives state, reasons about actions, uses tools autonomously.
     """
-    from agent import JobAgent
+    try:
+        from agent import JobAgent
+    except ImportError as ie:
+        log.error(f"Could not import agent.py: {ie}")
+        return jsonify({"error": f"Agent module not found: {ie}. Make sure agent.py is in the same directory as backend.py."}), 500
 
     body = request.get_json() or {}
     profile = body.get("profile", {})
@@ -576,13 +580,14 @@ def run_agent():
                 )
                 return call_claude(prompt, "Expert cover letter writer.", 600)
             else:
-                prompt = (
-                    "Tailor this resume for the job.\n"
-                    "Job: " + job.get("title","") + " at " + job.get("company","") + "\n"
-                    "Description: " + job.get("description","")[:200] + "\n"
-                    "Candidate: " + (prof.get("title") or "") + ", Skills: " + ", ".join(prof.get("skills",[])[:10]) + "\n"
+                prompt = " ".join([
+                    "Tailor this resume for the job.",
+                    "Job:", job.get("title",""), "at", job.get("company","") + ".",
+                    "Description:", job.get("description","")[:200] + ".",
+                    "Candidate:", (prof.get("title") or "") + ",",
+                    "Skills:", ", ".join(prof.get("skills",[])[:10]) + ".",
                     "Output: 1) Summary 2) Top 8 skills 3) Rewritten bullets"
-                )
+                ])
                 return call_claude(prompt, "Expert resume writer. Concise and keyword-rich.", 800)
         except Exception as e:
             return "Error generating " + content_type + ": " + str(e)
@@ -599,12 +604,3 @@ def run_agent():
 
 @app.route("/agent/approve", methods=["POST"])
 def approve_job():
-    """Human approves or rejects a pending job."""
-    body = request.get_json() or {}
-    # This just signals approval — the frontend handles state
-    return jsonify({"status": "ok", "job_id": body.get("job_id"), "approved": body.get("approved", True)})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print(f"\n{'='*50}\n  JobAgent EU Backend — port {port}\n  Claude: {'OK' if ANTHROPIC_KEY else 'MISSING'}\n  Sources: 7 job boards\n{'='*50}\n")
-    app.run(host="0.0.0.0", port=port, debug=False)
