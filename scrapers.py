@@ -166,12 +166,14 @@ def fetch_themuse(keywords):
         log.error("The Muse: {}".format(e))
     return results
 
-def fetch_adzuna(keywords, app_id="", app_key=""):
+def fetch_adzuna(keywords, app_id="", app_key="", countries=None):
     if not app_id or not app_key:
         return []
+    # Use specified countries or default to common EU+IN
+    country_list = countries if countries else ["nl", "de", "gb"]
     results = []
     try:
-        for country in ["nl", "de", "gb", "at", "ch", "in", "sg"]:
+        for country in country_list:
             r = requests.get(
                 "https://api.adzuna.com/v1/api/jobs/{}/search/1?app_id={}&app_key={}&results_per_page=8&what={}&content-type=application/json".format(
                     country, app_id, app_key, quote_plus(keywords)
