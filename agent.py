@@ -317,10 +317,16 @@ class JobAgent:
         if saved_state:
             self.load_state(saved_state)
 
-        # Build keywords from profile
+        # Build smart short keywords from profile
         title = (profile.get("title") or "").lower()
-        skills = " ".join(profile.get("skills", [])[:3])
-        keywords = f"{title} {skills}".strip() or "senior engineer europe"
+        # Take only first 3 words of title (e.g. "staff premier support" not full title)
+        title_words = " ".join(title.split()[:3])
+        # Take top 2 most distinctive skills
+        skills = profile.get("skills", [])
+        top_skills = " ".join(skills[:2]).lower() if skills else ""
+        keywords = "{} {}".format(title_words, top_skills).strip() or "senior engineer europe"
+        # Also prepare a broader fallback
+        broad_keywords = title_words or top_skills or "senior engineer europe"
 
         state_summary = self.get_state_summary()
 
@@ -344,6 +350,8 @@ CURRENT STATE:
 
 MANDATORY SEQUENCE — follow this EXACTLY:
 Step 1: Call search_jobs with keywords='{keywords}' and sources=['arbeitnow','remotive','weworkremotely','themuse','adzuna']
+Step 1b: If Step 1 returns 0 jobs, call search_jobs again with shorter keywords (just the job title, e.g. "support engineer" or "data engineer")
+Step 1c: If still 0 jobs, call search_jobs with very broad keywords like "engineer europe" or "senior manager"
 Step 2: Call evaluate_jobs with ALL job_ids returned from search
 Step 3: For each job with score ≥85: call prepare_application then mark_applied(method='auto')
 Step 4: For each job with score 60-84: call request_human_approval
@@ -358,8 +366,12 @@ CRITICAL RULES:
 - Be concise in tool calls"""
 
         messages = [{"role": "user", "content":
-            f"Start now. Call search_jobs immediately with keywords='{keywords}'. "
-            f"Do NOT skip any steps. Do NOT reference job boards other than through the search_jobs tool."}]
+            (
+                "Start now. First call search_jobs with keywords='" + keywords + "'. "
+                "If 0 results, immediately try again with shorter keywords: '" + broad_keywords + "'. "
+                "If still 0, try 'senior engineer europe' or 'data engineer remote'. "
+                "Do NOT give up after one search attempt. Try at least 2-3 different keyword variations."
+            )}]
 
         # Agent loop — Claude keeps calling tools until it calls finish
         max_iterations = 20
