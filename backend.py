@@ -293,49 +293,59 @@ def fetch_stepstone(keywords):
 # ── Scoring ───────────────────────────────────────────
 
 def fetch_naukri(keywords):
-    """Scrape Naukri.com — India's #1 job board."""
+    """Scrape Naukri.com using requests (no Playwright needed)."""
     results = []
     try:
-        from playwright.sync_api import sync_playwright
         query = quote_plus(keywords)
-        url = "https://www.naukri.com/{}-jobs?k={}&nignbevent_src=jobsearchDesk".format(
-            keywords.lower().replace(" ", "-"), query
-        )
-        log.info("Scraping Naukri: {}".format(url))
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            page = browser.new_page(user_agent=HEADERS["User-Agent"])
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(2000)
-            html = page.content()
-            browser.close()
-        soup = BeautifulSoup(html, "lxml")
-        cards = soup.select("article.jobTuple, .jobTupleHeader, [class*='job-tuple'], .cust-job-tuple")
-        log.info("Naukri: {} raw cards".format(len(cards)))
-        for card in cards[:20]:
-            try:
-                title_el = card.select_one("a.title, .jobTitle, [class*='jobTitle'], h2 a")
-                company_el = card.select_one(".companyInfo a, .comp-name, [class*='comp-name']")
-                location_el = card.select_one(".location, .locWdth, [class*='location']")
-                salary_el = card.select_one(".salary, [class*='salary']")
-                link_el = card.select_one("a[href*='naukri.com']") or title_el
-                if not title_el: continue
-                href = link_el.get("href", "") if link_el else ""
+        url = "https://www.naukri.com/jobapi/v3/search?noOfResults=20&urlType=search_by_keyword&searchType=adv&keyword={}&jobAge=7".format(query)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "appid": "109",
+            "systemid": "109",
+        }
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            for job in data.get("jobDetails", [])[:20]:
                 results.append({
-                    "id": "naukri_{}".format(len(results)),
-                    "title": title_el.get_text(strip=True),
-                    "company": company_el.get_text(strip=True) if company_el else "Unknown",
-                    "location": location_el.get_text(strip=True) if location_el else "India",
-                    "salary": salary_el.get_text(strip=True) if salary_el else "Competitive",
-                    "url": href if href.startswith("http") else "https://www.naukri.com" + href,
+                    "id": "naukri_{}".format(job.get("jobId", len(results))),
+                    "title": job.get("title", ""),
+                    "company": job.get("companyName", ""),
+                    "location": ", ".join(job.get("placeholders", [{}])[1].get("label", "India").split(",")[:2]) if len(job.get("placeholders", [])) > 1 else "India",
+                    "salary": job.get("placeholders", [{}])[2].get("label", "Competitive") if len(job.get("placeholders", [])) > 2 else "Competitive",
+                    "url": "https://www.naukri.com{}".format(job.get("jdURL", "")),
                     "source": "Naukri 🇮🇳",
                     "tags": ["India", "English"],
                     "posted": "Recently",
-                    "description": card.get_text(strip=True)[:400],
+                    "description": job.get("jobDescription", "")[:400],
                     "match": 0,
                 })
-            except Exception:
-                continue
+        else:
+            # Fallback: scrape search page
+            r2 = requests.get(
+                "https://www.naukri.com/{}-jobs".format(keywords.lower().replace(" ", "-")),
+                headers=HEADERS, timeout=15
+            )
+            if r2.status_code == 200:
+                soup = BeautifulSoup(r2.text, "lxml")
+                for card in soup.select(".jobTuple, article.jobTuple")[:10]:
+                    title_el = card.select_one("a.title, .jobTitle")
+                    if not title_el:
+                        continue
+                    results.append({
+                        "id": "naukri_{}".format(len(results)),
+                        "title": title_el.get_text(strip=True),
+                        "company": (card.select_one(".companyInfo a") or card.select_one(".comp-name") or title_el).get_text(strip=True),
+                        "location": (card.select_one(".location") or title_el).get_text(strip=True),
+                        "salary": "Competitive",
+                        "url": title_el.get("href", "https://www.naukri.com"),
+                        "source": "Naukri 🇮🇳",
+                        "tags": ["India", "English"],
+                        "posted": "Recently",
+                        "description": card.get_text(strip=True)[:400],
+                        "match": 0,
+                    })
         log.info("Naukri: {} jobs".format(len(results)))
     except Exception as e:
         log.error("Naukri: {}".format(e))
@@ -563,44 +573,3 @@ def generate_content():
                 profile.get("experience_years", 0), ", ".join(profile.get("skills", [])[:10])
             )
             result = call_claude(prompt, "Expert resume writer.", 1200)
-        return jsonify({"success": True, "content": result})
-    except Exception as e:
-        log.error("Generate error: {}".format(e))
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/search", methods=["POST"])
-def search_jobs():
-    b = request.get_json() or {}
-    kw = b.get("keywords", "senior engineer europe")
-    prof = b.get("profile", {})
-    sources = b.get("sources", ["arbeitnow", "remotive", "adzuna", "weworkremotely", "themuse"])
-    aid = b.get("adzuna_app_id", "") or os.environ.get("ADZUNA_APP_ID", "")
-    akey = b.get("adzuna_app_key", "") or os.environ.get("ADZUNA_APP_KEY", "")
-    profile_title = (prof.get("title") or "").strip()
-    fallback_kw = profile_title or kw
-    tasks = []
-    if "arbeitnow" in sources:
-        tasks.append(lambda k=kw: fetch_arbeitnow(k))
-        tasks.append(lambda k=fallback_kw: fetch_arbeitnow(k))
-    if "remotive" in sources:
-        tasks.append(lambda k=kw: fetch_remotive(k))
-    if "weworkremotely" in sources:
-        tasks.append(lambda k=kw: fetch_weworkremotely(k))
-    if "themuse" in sources:
-        tasks.append(lambda k=kw: fetch_themuse(k))
-    if "stepstone" in sources:
-        tasks.append(lambda k=kw: fetch_stepstone(k))
-    if "naukri" in sources:
-        tasks.append(lambda k=kw: fetch_naukri(k))
-    if "iimjobs" in sources:
-        tasks.append(lambda k=kw: fetch_iimjobs(k))
-    if "instahyre" in sources:
-        tasks.append(lambda k=kw: fetch_instahyre(k))
-    if "adzuna" in sources and aid and akey:
-        tasks.append(lambda k=kw: fetch_adzuna(k, aid, akey))
-        if profile_title:
-            tasks.append(lambda k=profile_title: fetch_adzuna(k, aid, akey))
-    all_jobs = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = [ex.submit(t) for t in tasks]
-        for fut in as_completed(futures, timeout=25):
