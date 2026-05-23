@@ -219,7 +219,7 @@ def fetch_adzuna(keywords, app_id="", app_key=""):
         return []
     results = []
     try:
-        for country in ["nl", "de", "gb", "at", "ch"]:
+        for country in ["nl", "de", "gb", "at", "ch", "in", "sg"]:
             r = requests.get(
                 "https://api.adzuna.com/v1/api/jobs/{}/search/1?app_id={}&app_key={}&results_per_page=8&what={}&content-type=application/json".format(
                     country, app_id, app_key, quote_plus(keywords)
@@ -291,6 +291,138 @@ def fetch_stepstone(keywords):
     return results
 
 # ── Scoring ───────────────────────────────────────────
+
+def fetch_naukri(keywords):
+    """Scrape Naukri.com — India's #1 job board."""
+    results = []
+    try:
+        from playwright.sync_api import sync_playwright
+        query = quote_plus(keywords)
+        url = "https://www.naukri.com/{}-jobs?k={}&nignbevent_src=jobsearchDesk".format(
+            keywords.lower().replace(" ", "-"), query
+        )
+        log.info("Scraping Naukri: {}".format(url))
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            page = browser.new_page(user_agent=HEADERS["User-Agent"])
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(2000)
+            html = page.content()
+            browser.close()
+        soup = BeautifulSoup(html, "lxml")
+        cards = soup.select("article.jobTuple, .jobTupleHeader, [class*='job-tuple'], .cust-job-tuple")
+        log.info("Naukri: {} raw cards".format(len(cards)))
+        for card in cards[:20]:
+            try:
+                title_el = card.select_one("a.title, .jobTitle, [class*='jobTitle'], h2 a")
+                company_el = card.select_one(".companyInfo a, .comp-name, [class*='comp-name']")
+                location_el = card.select_one(".location, .locWdth, [class*='location']")
+                salary_el = card.select_one(".salary, [class*='salary']")
+                link_el = card.select_one("a[href*='naukri.com']") or title_el
+                if not title_el: continue
+                href = link_el.get("href", "") if link_el else ""
+                results.append({
+                    "id": "naukri_{}".format(len(results)),
+                    "title": title_el.get_text(strip=True),
+                    "company": company_el.get_text(strip=True) if company_el else "Unknown",
+                    "location": location_el.get_text(strip=True) if location_el else "India",
+                    "salary": salary_el.get_text(strip=True) if salary_el else "Competitive",
+                    "url": href if href.startswith("http") else "https://www.naukri.com" + href,
+                    "source": "Naukri 🇮🇳",
+                    "tags": ["India", "English"],
+                    "posted": "Recently",
+                    "description": card.get_text(strip=True)[:400],
+                    "match": 0,
+                })
+            except Exception:
+                continue
+        log.info("Naukri: {} jobs".format(len(results)))
+    except Exception as e:
+        log.error("Naukri: {}".format(e))
+    return results
+
+
+def fetch_iimjobs(keywords):
+    """Scrape IIMJobs — premium Indian jobs for MBAs, strategy, consulting."""
+    results = []
+    try:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        url = "https://www.iimjobs.com/search/?search={}".format(quote_plus(keywords))
+        r = session.get(url, timeout=15)
+        if r.status_code != 200:
+            return []
+        soup = BeautifulSoup(r.text, "lxml")
+        cards = soup.select(".job-listings .job, article.job, .jobCard, [class*='job-item']")
+        log.info("IIMJobs: {} raw cards".format(len(cards)))
+        for card in cards[:20]:
+            try:
+                title_el = card.select_one("h2 a, h3 a, .job-title a, a.title")
+                company_el = card.select_one(".company, .comp-name, [class*='company']")
+                location_el = card.select_one(".location, [class*='location']")
+                link_el = card.select_one("a[href]")
+                if not title_el: continue
+                href = link_el.get("href", "") if link_el else ""
+                results.append({
+                    "id": "iimj_{}".format(len(results)),
+                    "title": title_el.get_text(strip=True),
+                    "company": company_el.get_text(strip=True) if company_el else "Unknown",
+                    "location": location_el.get_text(strip=True) if location_el else "India",
+                    "salary": "Competitive",
+                    "url": href if href.startswith("http") else "https://www.iimjobs.com" + href,
+                    "source": "IIMJobs 🇮🇳",
+                    "tags": ["India", "Senior", "MBA", "English"],
+                    "posted": "Recently",
+                    "description": card.get_text(strip=True)[:400],
+                    "match": 0,
+                })
+            except Exception:
+                continue
+        log.info("IIMJobs: {} jobs".format(len(results)))
+    except Exception as e:
+        log.error("IIMJobs: {}".format(e))
+    return results
+
+
+def fetch_instahyre(keywords):
+    """Fetch from Instahyre — curated Indian startup/tech jobs."""
+    results = []
+    try:
+        url = "https://www.instahyre.com/search-jobs/?q={}".format(quote_plus(keywords))
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        if r.status_code != 200:
+            return []
+        soup = BeautifulSoup(r.text, "lxml")
+        cards = soup.select(".opportunity-card, [class*='job-card'], .job-listing")
+        log.info("Instahyre: {} raw cards".format(len(cards)))
+        for card in cards[:20]:
+            try:
+                title_el = card.select_one("h2, h3, .role-title, [class*='title']")
+                company_el = card.select_one(".company, [class*='company']")
+                location_el = card.select_one(".location, [class*='location']")
+                link_el = card.select_one("a[href]")
+                if not title_el: continue
+                href = link_el.get("href", "") if link_el else ""
+                results.append({
+                    "id": "ih_{}".format(len(results)),
+                    "title": title_el.get_text(strip=True),
+                    "company": company_el.get_text(strip=True) if company_el else "Unknown",
+                    "location": location_el.get_text(strip=True) if location_el else "India",
+                    "salary": "Competitive",
+                    "url": href if href.startswith("http") else "https://www.instahyre.com" + href,
+                    "source": "Instahyre 🇮🇳",
+                    "tags": ["India", "Startup", "Tech"],
+                    "posted": "Recently",
+                    "description": card.get_text(strip=True)[:400],
+                    "match": 0,
+                })
+            except Exception:
+                continue
+        log.info("Instahyre: {} jobs".format(len(results)))
+    except Exception as e:
+        log.error("Instahyre: {}".format(e))
+    return results
+
 def score_job(job, profile):
     score = 30
     skills = [s.lower() for s in profile.get("skills", [])]
@@ -316,7 +448,9 @@ def score_job(job, profile):
     location = job.get("location", "").lower()
     if any(loc in location for loc in ["netherlands", "germany", "amsterdam", "berlin",
                                         "munich", "hamburg", "stockholm", "vienna",
-                                        "zurich", "europe", "remote", "worldwide"]):
+                                        "zurich", "europe", "remote", "worldwide",
+                                        "india", "bangalore", "mumbai", "delhi",
+                                        "hyderabad", "pune", "chennai", "bengaluru"]):
         score += 8
     if any(t in ["Visa Sponsor", "Relocation Package"] for t in job.get("tags", [])):
         score += 12
@@ -456,6 +590,12 @@ def search_jobs():
         tasks.append(lambda k=kw: fetch_themuse(k))
     if "stepstone" in sources:
         tasks.append(lambda k=kw: fetch_stepstone(k))
+    if "naukri" in sources:
+        tasks.append(lambda k=kw: fetch_naukri(k))
+    if "iimjobs" in sources:
+        tasks.append(lambda k=kw: fetch_iimjobs(k))
+    if "instahyre" in sources:
+        tasks.append(lambda k=kw: fetch_instahyre(k))
     if "adzuna" in sources and aid and akey:
         tasks.append(lambda k=kw: fetch_adzuna(k, aid, akey))
         if profile_title:
@@ -464,139 +604,3 @@ def search_jobs():
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = [ex.submit(t) for t in tasks]
         for fut in as_completed(futures, timeout=25):
-            try:
-                all_jobs += fut.result(timeout=5)
-            except Exception:
-                pass
-    all_jobs = dedup(all_jobs)
-    for j in all_jobs:
-        j["match"] = score_job(j, prof)
-    all_jobs.sort(key=lambda j: j["match"], reverse=True)
-    if prof.get("name"):
-        all_jobs = claude_score_jobs(all_jobs, prof)
-        all_jobs.sort(key=lambda j: j["match"], reverse=True)
-    log.info("Search returned {} jobs".format(len(all_jobs)))
-    return jsonify({"jobs": all_jobs, "total": len(all_jobs)})
-
-@app.route("/agent/run", methods=["POST"])
-def run_agent():
-    try:
-        from agent import JobAgent
-    except ImportError as ie:
-        log.error("Cannot import agent: {}".format(ie))
-        return jsonify({"error": "agent.py not found. Upload it to the backend repo."}), 500
-    b = request.get_json() or {}
-    profile = b.get("profile", {})
-    saved_state = b.get("state", {})
-    sources = b.get("sources", ["arbeitnow", "remotive", "weworkremotely", "themuse", "adzuna"])
-    aid = b.get("adzuna_app_id", "") or os.environ.get("ADZUNA_APP_ID", "")
-    akey = b.get("adzuna_app_key", "") or os.environ.get("ADZUNA_APP_KEY", "")
-    if not profile.get("name"):
-        return jsonify({"error": "Profile required. Parse resume first."}), 400
-
-    def search_fn(keywords, srcs):
-        # Shorten keywords if too long (>5 words)
-        kw_words = keywords.strip().split()
-        if len(kw_words) > 5:
-            keywords = " ".join(kw_words[:4])
-        log.info("Agent search_fn: keywords='{}'".format(keywords))
-
-        jobs = []
-        tasks = []
-        if "arbeitnow" in srcs:
-            tasks.append(lambda k=keywords: fetch_arbeitnow(k))
-        if "remotive" in srcs:
-            tasks.append(lambda k=keywords: fetch_remotive(k))
-        if "weworkremotely" in srcs:
-            tasks.append(lambda k=keywords: fetch_weworkremotely(k))
-        if "themuse" in srcs:
-            tasks.append(lambda k=keywords: fetch_themuse(k))
-        if "adzuna" in srcs and aid and akey:
-            tasks.append(lambda k=keywords: fetch_adzuna(k, aid, akey))
-        with ThreadPoolExecutor(max_workers=6) as ex:
-            futs = [ex.submit(t) for t in tasks]
-            for fut in as_completed(futs, timeout=20):
-                try:
-                    jobs += fut.result(timeout=5)
-                except Exception:
-                    pass
-
-        # If no results, try broader fallback keywords
-        if len(jobs) < 3:
-            log.info("Agent: 0 results, trying broader keywords")
-            broad = " ".join(kw_words[:2]) if len(kw_words) >= 2 else "senior engineer"
-            fallback_tasks = [
-                lambda k=broad: fetch_arbeitnow(k),
-                lambda k=broad: fetch_remotive(k),
-                lambda k=broad: fetch_weworkremotely(k),
-                lambda k=broad: fetch_themuse(k),
-            ]
-            with ThreadPoolExecutor(max_workers=4) as ex:
-                futs = [ex.submit(t) for t in fallback_tasks]
-                for fut in as_completed(futs, timeout=20):
-                    try:
-                        jobs += fut.result(timeout=5)
-                    except Exception:
-                        pass
-
-        jobs = dedup(jobs)
-        for j in jobs:
-            j["match"] = score_job(j, profile)
-        jobs.sort(key=lambda j: j["match"], reverse=True)
-        if jobs:
-            jobs = claude_score_jobs(jobs, profile)
-            jobs.sort(key=lambda j: j["match"], reverse=True)
-        log.info("Agent search_fn returned {} jobs".format(len(jobs)))
-        return jobs
-
-    def generate_fn(content_type, job, prof):
-        try:
-            if content_type == "cover":
-                prompt = "Write a 3-paragraph cover letter. Job: {} at {}, {}. Description: {}. Candidate: {}, {} yrs, Skills: {}.".format(
-                    job.get("title",""), job.get("company",""), job.get("location",""),
-                    job.get("description","")[:300], prof.get("title",""),
-                    prof.get("experience_years",0), ", ".join(prof.get("skills",[])[:8])
-                )
-                return call_claude(prompt, "Expert cover letter writer.", 600)
-            else:
-                prompt = "Tailor resume. Job: {} at {}. Description: {}. Candidate: {}, Skills: {}. Output: Summary + Skills + Bullets.".format(
-                    job.get("title",""), job.get("company",""),
-                    job.get("description","")[:200], prof.get("title",""),
-                    ", ".join(prof.get("skills",[])[:10])
-                )
-                return call_claude(prompt, "Expert resume writer.", 800)
-        except Exception as e:
-            return "Error: {}".format(e)
-
-    try:
-        agent = JobAgent(call_claude, search_fn, generate_fn)
-        result = agent.run(profile, saved_state)
-
-        # Trim job descriptions from state to keep response small
-        if "state" in result and "jobs" in result["state"]:
-            for job in result["state"]["jobs"].values():
-                job.pop("description", None)  # remove large description field
-
-        log.info("Agent response: {} applied, {} pending, {} followups".format(
-            result.get("applied_count", 0),
-            len(result.get("pending_approval", [])),
-            len(result.get("followups_drafted", []))
-        ))
-        return jsonify(result)
-    except Exception as e:
-        log.error("Agent error: {}".format(e))
-        import traceback
-        log.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/agent/approve", methods=["POST"])
-def approve_job():
-    body = request.get_json() or {}
-    return jsonify({"status": "ok", "job_id": body.get("job_id"), "approved": body.get("approved", True)})
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print("\n{}\n  JobAgent EU Backend — port {}\n  Claude: {}\n  Sources: 6\n{}\n".format(
-        "="*45, port, "OK" if ANTHROPIC_KEY else "MISSING KEY", "="*45
-    ))
-    app.run(host="0.0.0.0", port=port, debug=False)
