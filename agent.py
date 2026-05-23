@@ -462,3 +462,16 @@ CRITICAL RULES:
         # Build final output
         applied = [a for a in self.state["actions_taken"] if a.get("action") == "applied"]
         return {
+            "status": "complete",
+            "summary": final_summary,
+            "iterations": iteration,
+            "actions_taken": self.state["actions_taken"],
+            "applied_count": len(applied),
+            "applied_jobs": applied,
+            "pending_approval": self.state["pending_approval"],
+            "followups_drafted": self.state["followups_drafted"],
+            "state": {
+                "jobs": self.state["jobs"],
+                "applications": self.state["applications"],
+            }
+        }
