@@ -63,375 +63,13 @@ def extract_text_from_file(file_bytes, filename):
         raise Exception("Unsupported file type: {}. Use PDF, DOCX, or TXT.".format(ext))
 
 # ── Job Sources ───────────────────────────────────────
-def fetch_arbeitnow(keywords):
-    results = []
-    try:
-        r = requests.get("https://www.arbeitnow.com/api/job-board-api", headers=HEADERS, timeout=15)
-        if r.status_code != 200:
-            return []
-        kw = keywords.lower().split()
-        broad = kw + ["engineer", "manager", "consultant", "analyst", "developer", "data", "cloud"]
-        for job in r.json().get("data", []):
-            text = "{} {}".format(job.get("title",""), job.get("description","")).lower()
-            if any(k in text for k in broad):
-                results.append({
-                    "id": "arb_{}".format(job.get("slug", len(results))),
-                    "title": job.get("title", ""),
-                    "company": job.get("company_name", ""),
-                    "location": job.get("location", "Europe"),
-                    "salary": "Competitive",
-                    "url": job.get("url", ""),
-                    "source": "Arbeitnow",
-                    "tags": job.get("tags", [])[:4] + (["Visa Sponsor"] if job.get("visa_sponsored") else []),
-                    "posted": "Recently",
-                    "description": job.get("description", "")[:400],
-                    "match": 0,
-                })
-    except Exception as e:
-        log.error("Arbeitnow: {}".format(e))
-    return results
 
-def fetch_remotive(keywords):
-    results = []
-    try:
-        r = requests.get(
-            "https://remotive.com/api/remote-jobs?search={}&limit=20".format(quote_plus(keywords)),
-            headers=HEADERS, timeout=15
-        )
-        if r.status_code != 200:
-            return []
-        for job in r.json().get("jobs", []):
-            results.append({
-                "id": "rem_{}".format(job.get("id", len(results))),
-                "title": job.get("title", ""),
-                "company": job.get("company_name", ""),
-                "location": job.get("candidate_required_location", "Remote/Europe"),
-                "salary": job.get("salary", "Competitive"),
-                "url": job.get("url", ""),
-                "source": "Remotive",
-                "tags": job.get("tags", [])[:4] + ["Remote", "English Only"],
-                "posted": job.get("publication_date", "")[:10],
-                "description": BeautifulSoup(job.get("description", ""), "lxml").get_text()[:400],
-                "match": 0,
-            })
-    except Exception as e:
-        log.error("Remotive: {}".format(e))
-    return results
-
-def fetch_weworkremotely(keywords):
-    results = []
-    try:
-        feeds = [
-            "https://weworkremotely.com/remote-jobs.rss",
-            "https://weworkremotely.com/categories/remote-programming-jobs.rss",
-            "https://weworkremotely.com/categories/remote-management-finance-jobs.rss",
-            "https://weworkremotely.com/categories/remote-data-science-ai-jobs.rss",
-        ]
-        kw = keywords.lower().split()
-        seen = set()
-        for feed_url in feeds:
-            r = requests.get(feed_url, headers=HEADERS, timeout=15)
-            if r.status_code != 200:
-                continue
-            try:
-                root = ET.fromstring(r.content)
-                for item in root.findall(".//item"):
-                    title = item.findtext("title", "").strip()
-                    link = item.findtext("link", "").strip()
-                    desc = BeautifulSoup(item.findtext("description", ""), "lxml").get_text()[:400]
-                    company = ""
-                    if " at " in title:
-                        parts = title.split(" at ", 1)
-                        title = parts[0].strip()
-                        company = parts[1].strip()
-                    text = "{} {}".format(title, desc).lower()
-                    if any(k in text for k in kw) and link not in seen:
-                        seen.add(link)
-                        results.append({
-                            "id": "wwr_{}".format(len(results)),
-                            "title": title,
-                            "company": company,
-                            "location": "Remote / Worldwide",
-                            "salary": "Competitive",
-                            "url": link,
-                            "source": "WeWorkRemotely",
-                            "tags": ["Remote", "English Only", "Worldwide"],
-                            "posted": item.findtext("pubDate", "")[:16],
-                            "description": desc,
-                            "match": 0,
-                        })
-            except ET.ParseError:
-                continue
-    except Exception as e:
-        log.error("WeWorkRemotely: {}".format(e))
-    return results
-
-def fetch_themuse(keywords):
-    results = []
-    try:
-        kw_lower = keywords.lower()
-        categories = [
-            "Data Science", "Software Engineer", "Product", "Operations",
-            "Finance", "Strategy", "Business Development", "Engineering",
-            "Consulting", "Management", "Project Management",
-        ]
-        selected = [c for c in categories if any(w in kw_lower for w in c.lower().split())]
-        if not selected:
-            selected = ["Operations", "Software Engineer"]
-        seen = set()
-        for cat in selected[:3]:
-            url = "https://www.themuse.com/api/public/jobs?category={}&level=Senior+Level&level=Mid+Level&page=0&descending=true".format(
-                quote_plus(cat)
-            )
-            r = requests.get(url, headers=HEADERS, timeout=15)
-            if r.status_code != 200:
-                continue
-            for job in r.json().get("results", []):
-                title = job.get("name", "")
-                company = job.get("company", {}).get("name", "")
-                locs = job.get("locations", [{}])
-                location = locs[0].get("name", "Remote") if locs else "Remote"
-                job_url = job.get("refs", {}).get("landing_page", "")
-                desc = BeautifulSoup(job.get("contents", ""), "lxml").get_text()[:400]
-                text = "{} {}".format(title, desc).lower()
-                kw_list = keywords.lower().split()
-                if any(k in text for k in kw_list) and job_url not in seen:
-                    seen.add(job_url)
-                    results.append({
-                        "id": "muse_{}".format(job.get("id", len(results))),
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "salary": "Competitive",
-                        "url": job_url,
-                        "source": "The Muse",
-                        "tags": [cat, "English Only"],
-                        "posted": job.get("publication_date", "")[:10],
-                        "description": desc,
-                        "match": 0,
-                    })
-    except Exception as e:
-        log.error("The Muse: {}".format(e))
-    return results
-
-def fetch_adzuna(keywords, app_id="", app_key=""):
-    if not app_id or not app_key:
-        return []
-    results = []
-    try:
-        for country in ["nl", "de", "gb", "at", "ch", "in", "sg"]:
-            r = requests.get(
-                "https://api.adzuna.com/v1/api/jobs/{}/search/1?app_id={}&app_key={}&results_per_page=8&what={}&content-type=application/json".format(
-                    country, app_id, app_key, quote_plus(keywords)
-                ),
-                timeout=15,
-            )
-            if r.status_code != 200:
-                continue
-            for job in r.json().get("results", []):
-                results.append({
-                    "id": "adz_{}_{}".format(country, job.get("id", len(results))),
-                    "title": job.get("title", ""),
-                    "company": job.get("company", {}).get("display_name", ""),
-                    "location": job.get("location", {}).get("display_name", ""),
-                    "salary": "Competitive",
-                    "url": job.get("redirect_url", ""),
-                    "source": "Adzuna ({})".format(country.upper()),
-                    "tags": ["English Friendly"],
-                    "posted": job.get("created", "")[:10],
-                    "description": job.get("description", "")[:400],
-                    "match": 0,
-                })
-    except Exception as e:
-        log.error("Adzuna: {}".format(e))
-    return results
-
-def fetch_stepstone(keywords):
-    results = []
-    try:
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        url = "https://www.stepstone.de/jobsuche/?q={}&where=Deutschland&radius=30&lang=en_GB".format(
-            quote_plus(keywords)
-        )
-        r = session.get(url, timeout=20)
-        if r.status_code != 200:
-            return []
-        soup = BeautifulSoup(r.text, "lxml")
-        cards = (
-            soup.select("article[data-at='job-item']") or
-            soup.select("[data-genesis-element='BASE']") or
-            soup.select("article")
-        )
-        for card in cards[:15]:
-            try:
-                title_el = card.select_one("h2 a, h3 a, [data-at='job-item-title']")
-                company_el = card.select_one("[data-at='job-item-company-name'], [class*='company']")
-                location_el = card.select_one("[data-at='job-item-location'], [class*='location']")
-                if not title_el:
-                    continue
-                href = title_el.get("href", "")
-                results.append({
-                    "id": "ss_{}".format(len(results)),
-                    "title": title_el.get_text(strip=True),
-                    "company": company_el.get_text(strip=True) if company_el else "Unknown",
-                    "location": location_el.get_text(strip=True) if location_el else "Germany",
-                    "salary": "Competitive",
-                    "url": "https://www.stepstone.de{}".format(href) if href.startswith("/") else href,
-                    "source": "Stepstone DE",
-                    "tags": ["Germany", "English Friendly"],
-                    "posted": "Recently",
-                    "description": card.get_text(strip=True)[:400],
-                    "match": 0,
-                })
-            except Exception:
-                continue
-    except Exception as e:
-        log.error("Stepstone: {}".format(e))
-    return results
-
-# ── Scoring ───────────────────────────────────────────
-
-def fetch_naukri(keywords):
-    """Scrape Naukri.com using requests (no Playwright needed)."""
-    results = []
-    try:
-        query = quote_plus(keywords)
-        url = "https://www.naukri.com/jobapi/v3/search?noOfResults=20&urlType=search_by_keyword&searchType=adv&keyword={}&jobAge=7".format(query)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "appid": "109",
-            "systemid": "109",
-        }
-        r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code == 200:
-            data = r.json()
-            for job in data.get("jobDetails", [])[:20]:
-                results.append({
-                    "id": "naukri_{}".format(job.get("jobId", len(results))),
-                    "title": job.get("title", ""),
-                    "company": job.get("companyName", ""),
-                    "location": ", ".join(job.get("placeholders", [{}])[1].get("label", "India").split(",")[:2]) if len(job.get("placeholders", [])) > 1 else "India",
-                    "salary": job.get("placeholders", [{}])[2].get("label", "Competitive") if len(job.get("placeholders", [])) > 2 else "Competitive",
-                    "url": "https://www.naukri.com{}".format(job.get("jdURL", "")),
-                    "source": "Naukri 🇮🇳",
-                    "tags": ["India", "English"],
-                    "posted": "Recently",
-                    "description": job.get("jobDescription", "")[:400],
-                    "match": 0,
-                })
-        else:
-            # Fallback: scrape search page
-            r2 = requests.get(
-                "https://www.naukri.com/{}-jobs".format(keywords.lower().replace(" ", "-")),
-                headers=HEADERS, timeout=15
-            )
-            if r2.status_code == 200:
-                soup = BeautifulSoup(r2.text, "lxml")
-                for card in soup.select(".jobTuple, article.jobTuple")[:10]:
-                    title_el = card.select_one("a.title, .jobTitle")
-                    if not title_el:
-                        continue
-                    results.append({
-                        "id": "naukri_{}".format(len(results)),
-                        "title": title_el.get_text(strip=True),
-                        "company": (card.select_one(".companyInfo a") or card.select_one(".comp-name") or title_el).get_text(strip=True),
-                        "location": (card.select_one(".location") or title_el).get_text(strip=True),
-                        "salary": "Competitive",
-                        "url": title_el.get("href", "https://www.naukri.com"),
-                        "source": "Naukri 🇮🇳",
-                        "tags": ["India", "English"],
-                        "posted": "Recently",
-                        "description": card.get_text(strip=True)[:400],
-                        "match": 0,
-                    })
-        log.info("Naukri: {} jobs".format(len(results)))
-    except Exception as e:
-        log.error("Naukri: {}".format(e))
-    return results
-
-
-def fetch_iimjobs(keywords):
-    """Scrape IIMJobs — premium Indian jobs for MBAs, strategy, consulting."""
-    results = []
-    try:
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        url = "https://www.iimjobs.com/search/?search={}".format(quote_plus(keywords))
-        r = session.get(url, timeout=15)
-        if r.status_code != 200:
-            return []
-        soup = BeautifulSoup(r.text, "lxml")
-        cards = soup.select(".job-listings .job, article.job, .jobCard, [class*='job-item']")
-        log.info("IIMJobs: {} raw cards".format(len(cards)))
-        for card in cards[:20]:
-            try:
-                title_el = card.select_one("h2 a, h3 a, .job-title a, a.title")
-                company_el = card.select_one(".company, .comp-name, [class*='company']")
-                location_el = card.select_one(".location, [class*='location']")
-                link_el = card.select_one("a[href]")
-                if not title_el: continue
-                href = link_el.get("href", "") if link_el else ""
-                results.append({
-                    "id": "iimj_{}".format(len(results)),
-                    "title": title_el.get_text(strip=True),
-                    "company": company_el.get_text(strip=True) if company_el else "Unknown",
-                    "location": location_el.get_text(strip=True) if location_el else "India",
-                    "salary": "Competitive",
-                    "url": href if href.startswith("http") else "https://www.iimjobs.com" + href,
-                    "source": "IIMJobs 🇮🇳",
-                    "tags": ["India", "Senior", "MBA", "English"],
-                    "posted": "Recently",
-                    "description": card.get_text(strip=True)[:400],
-                    "match": 0,
-                })
-            except Exception:
-                continue
-        log.info("IIMJobs: {} jobs".format(len(results)))
-    except Exception as e:
-        log.error("IIMJobs: {}".format(e))
-    return results
-
-
-def fetch_instahyre(keywords):
-    """Fetch from Instahyre — curated Indian startup/tech jobs."""
-    results = []
-    try:
-        url = "https://www.instahyre.com/search-jobs/?q={}".format(quote_plus(keywords))
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        if r.status_code != 200:
-            return []
-        soup = BeautifulSoup(r.text, "lxml")
-        cards = soup.select(".opportunity-card, [class*='job-card'], .job-listing")
-        log.info("Instahyre: {} raw cards".format(len(cards)))
-        for card in cards[:20]:
-            try:
-                title_el = card.select_one("h2, h3, .role-title, [class*='title']")
-                company_el = card.select_one(".company, [class*='company']")
-                location_el = card.select_one(".location, [class*='location']")
-                link_el = card.select_one("a[href]")
-                if not title_el: continue
-                href = link_el.get("href", "") if link_el else ""
-                results.append({
-                    "id": "ih_{}".format(len(results)),
-                    "title": title_el.get_text(strip=True),
-                    "company": company_el.get_text(strip=True) if company_el else "Unknown",
-                    "location": location_el.get_text(strip=True) if location_el else "India",
-                    "salary": "Competitive",
-                    "url": href if href.startswith("http") else "https://www.instahyre.com" + href,
-                    "source": "Instahyre 🇮🇳",
-                    "tags": ["India", "Startup", "Tech"],
-                    "posted": "Recently",
-                    "description": card.get_text(strip=True)[:400],
-                    "match": 0,
-                })
-            except Exception:
-                continue
-        log.info("Instahyre: {} jobs".format(len(results)))
-    except Exception as e:
-        log.error("Instahyre: {}".format(e))
-    return results
+# Import all job board scrapers
+from scrapers import (
+    fetch_arbeitnow, fetch_remotive, fetch_weworkremotely,
+    fetch_themuse, fetch_adzuna, fetch_stepstone,
+    fetch_naukri, fetch_iimjobs, fetch_instahyre
+)
 
 def score_job(job, profile):
     score = 30
@@ -573,3 +211,223 @@ def generate_content():
                 profile.get("experience_years", 0), ", ".join(profile.get("skills", [])[:10])
             )
             result = call_claude(prompt, "Expert resume writer.", 1200)
+        return jsonify({"success": True, "content": result})
+    except Exception as e:
+        log.error("Generate error: {}".format(e))
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/search", methods=["POST"])
+def search_jobs():
+    b = request.get_json() or {}
+    kw = b.get("keywords", "senior engineer europe")
+    prof = b.get("profile", {})
+    sources = b.get("sources", ["arbeitnow", "remotive", "adzuna", "weworkremotely", "themuse"])
+    aid = b.get("adzuna_app_id", "") or os.environ.get("ADZUNA_APP_ID", "")
+    akey = b.get("adzuna_app_key", "") or os.environ.get("ADZUNA_APP_KEY", "")
+    profile_title = (prof.get("title") or "").strip()
+    fallback_kw = profile_title or kw
+    tasks = []
+    if "arbeitnow" in sources:
+        tasks.append(lambda k=kw: fetch_arbeitnow(k))
+        tasks.append(lambda k=fallback_kw: fetch_arbeitnow(k))
+    if "remotive" in sources:
+        tasks.append(lambda k=kw: fetch_remotive(k))
+    if "weworkremotely" in sources:
+        tasks.append(lambda k=kw: fetch_weworkremotely(k))
+    if "themuse" in sources:
+        tasks.append(lambda k=kw: fetch_themuse(k))
+    if "stepstone" in sources:
+        tasks.append(lambda k=kw: fetch_stepstone(k))
+    if "naukri" in sources:
+        tasks.append(lambda k=kw: fetch_naukri(k))
+    if "iimjobs" in sources:
+        tasks.append(lambda k=kw: fetch_iimjobs(k))
+    if "instahyre" in sources:
+        tasks.append(lambda k=kw: fetch_instahyre(k))
+    if "adzuna" in sources and aid and akey:
+        tasks.append(lambda k=kw: fetch_adzuna(k, aid, akey))
+        if profile_title:
+            tasks.append(lambda k=profile_title: fetch_adzuna(k, aid, akey))
+    all_jobs = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = [ex.submit(t) for t in tasks]
+        for fut in as_completed(futures, timeout=25):
+            try:
+                all_jobs += fut.result(timeout=5)
+            except Exception:
+                pass
+    all_jobs = dedup(all_jobs)
+    for j in all_jobs:
+        j["match"] = score_job(j, prof)
+    all_jobs.sort(key=lambda j: j["match"], reverse=True)
+    if prof.get("name"):
+        all_jobs = claude_score_jobs(all_jobs, prof)
+        all_jobs.sort(key=lambda j: j["match"], reverse=True)
+    log.info("Search returned {} jobs".format(len(all_jobs)))
+    return jsonify({"jobs": all_jobs, "total": len(all_jobs)})
+
+@app.route("/agent/run", methods=["POST"])
+def run_agent():
+    try:
+        from agent import JobAgent
+    except ImportError as ie:
+        log.error("Cannot import agent: {}".format(ie))
+        return jsonify({"error": "agent.py not found. Upload it to the backend repo."}), 500
+    b = request.get_json() or {}
+    profile = b.get("profile", {})
+    saved_state = b.get("state", {})
+    sources = b.get("sources", ["arbeitnow", "remotive", "weworkremotely", "themuse", "adzuna"])
+    aid = b.get("adzuna_app_id", "") or os.environ.get("ADZUNA_APP_ID", "")
+    akey = b.get("adzuna_app_key", "") or os.environ.get("ADZUNA_APP_KEY", "")
+    if not profile.get("name"):
+        return jsonify({"error": "Profile required. Parse resume first."}), 400
+
+    def search_fn(keywords, srcs):
+        # Shorten keywords if too long (>5 words)
+        kw_words = keywords.strip().split()
+        if len(kw_words) > 5:
+            keywords = " ".join(kw_words[:4])
+        log.info("Agent search_fn: keywords='{}'".format(keywords))
+
+        jobs = []
+        tasks = []
+        if "arbeitnow" in srcs:
+            tasks.append(lambda k=keywords: fetch_arbeitnow(k))
+        if "remotive" in srcs:
+            tasks.append(lambda k=keywords: fetch_remotive(k))
+        if "weworkremotely" in srcs:
+            tasks.append(lambda k=keywords: fetch_weworkremotely(k))
+        if "themuse" in srcs:
+            tasks.append(lambda k=keywords: fetch_themuse(k))
+        if "adzuna" in srcs and aid and akey:
+            tasks.append(lambda k=keywords: fetch_adzuna(k, aid, akey))
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futs = [ex.submit(t) for t in tasks]
+            for fut in as_completed(futs, timeout=20):
+                try:
+                    jobs += fut.result(timeout=5)
+                except Exception:
+                    pass
+
+        # If no results, try broader fallback keywords
+        if len(jobs) < 3:
+            log.info("Agent: 0 results, trying broader keywords")
+            broad = " ".join(kw_words[:2]) if len(kw_words) >= 2 else "senior engineer"
+            fallback_tasks = [
+                lambda k=broad: fetch_arbeitnow(k),
+                lambda k=broad: fetch_remotive(k),
+                lambda k=broad: fetch_weworkremotely(k),
+                lambda k=broad: fetch_themuse(k),
+            ]
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                futs = [ex.submit(t) for t in fallback_tasks]
+                for fut in as_completed(futs, timeout=20):
+                    try:
+                        jobs += fut.result(timeout=5)
+                    except Exception:
+                        pass
+
+        jobs = dedup(jobs)
+        for j in jobs:
+            j["match"] = score_job(j, profile)
+        jobs.sort(key=lambda j: j["match"], reverse=True)
+        if jobs:
+            jobs = claude_score_jobs(jobs, profile)
+            jobs.sort(key=lambda j: j["match"], reverse=True)
+        log.info("Agent search_fn returned {} jobs".format(len(jobs)))
+        return jobs
+
+    def generate_fn(content_type, job, prof):
+        try:
+            if content_type == "cover":
+                prompt = "Write a 3-paragraph cover letter. Job: {} at {}, {}. Description: {}. Candidate: {}, {} yrs, Skills: {}.".format(
+                    job.get("title",""), job.get("company",""), job.get("location",""),
+                    job.get("description","")[:300], prof.get("title",""),
+                    prof.get("experience_years",0), ", ".join(prof.get("skills",[])[:8])
+                )
+                return call_claude(prompt, "Expert cover letter writer.", 600)
+            else:
+                prompt = "Tailor resume. Job: {} at {}. Description: {}. Candidate: {}, Skills: {}. Output: Summary + Skills + Bullets.".format(
+                    job.get("title",""), job.get("company",""),
+                    job.get("description","")[:200], prof.get("title",""),
+                    ", ".join(prof.get("skills",[])[:10])
+                )
+                return call_claude(prompt, "Expert resume writer.", 800)
+        except Exception as e:
+            return "Error: {}".format(e)
+
+    try:
+        agent = JobAgent(call_claude, search_fn, generate_fn)
+        result = agent.run(profile, saved_state)
+
+        # Trim job descriptions from state to keep response small
+        if "state" in result and "jobs" in result["state"]:
+            for job in result["state"]["jobs"].values():
+                job.pop("description", None)  # remove large description field
+
+        log.info("Agent response: {} applied, {} pending, {} followups".format(
+            result.get("applied_count", 0),
+            len(result.get("pending_approval", [])),
+            len(result.get("followups_drafted", []))
+        ))
+        return jsonify(result)
+    except Exception as e:
+        log.error("Agent error: {}".format(e))
+        import traceback
+        log.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/agent/approve", methods=["POST"])
+def approve_job():
+    body = request.get_json() or {}
+    return jsonify({"status": "ok", "job_id": body.get("job_id"), "approved": body.get("approved", True)})
+
+
+@app.route("/fetch-job", methods=["POST"])
+def fetch_job():
+    """Fetch job description from a URL (LinkedIn, company sites, etc)."""
+    body = request.get_json() or {}
+    url = body.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL required"}), 400
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        if r.status_code != 200:
+            return jsonify({"error": "Could not fetch URL: {}".format(r.status_code)}), 400
+        soup = BeautifulSoup(r.text, "lxml")
+        # Remove nav, footer, scripts
+        for tag in soup.select("nav, footer, script, style, header, [class*='nav'], [class*='footer']"):
+            tag.decompose()
+        # Try common job description selectors
+        desc_el = (
+            soup.select_one(".job-description, .description__text, [class*='job-desc'], "
+                          "#job-details, .jobDescriptionContent, [data-testid='job-description'], "
+                          "article, main, .content")
+        )
+        description = desc_el.get_text(separator=" ", strip=True)[:3000] if desc_el else soup.get_text(separator=" ", strip=True)[:3000]
+        # Extract title and company from meta/title tags
+        title = ""
+        company = ""
+        og_title = soup.select_one('meta[property="og:title"]')
+        page_title = soup.select_one("title")
+        if og_title:
+            title = og_title.get("content", "")
+        elif page_title:
+            title = page_title.get_text(strip=True)
+        # Clean up title (often "Job Title | Company | LinkedIn")
+        if " | " in title:
+            parts = title.split(" | ")
+            title = parts[0].strip()
+            if len(parts) > 1:
+                company = parts[1].strip()
+        return jsonify({"description": description, "title": title, "company": company, "url": url})
+    except Exception as e:
+        log.error("fetch_job error: {}".format(e))
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    print("\n{}\n  JobAgent EU Backend — port {}\n  Claude: {}\n  Sources: 6\n{}\n".format(
+        "="*45, port, "OK" if ANTHROPIC_KEY else "MISSING KEY", "="*45
+    ))
+    app.run(host="0.0.0.0", port=port, debug=False)
