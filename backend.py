@@ -98,7 +98,8 @@ def score_job(job, profile):
                                         "munich", "hamburg", "stockholm", "vienna",
                                         "zurich", "europe", "remote", "worldwide",
                                         "india", "bangalore", "mumbai", "delhi",
-                                        "hyderabad", "pune", "chennai", "bengaluru"]):
+                                        "hyderabad", "pune", "chennai", "bengaluru",
+                                        "gurgaon", "noida", "kolkata", "ahmedabad"]):
         score += 8
     if any(t in ["Visa Sponsor", "Relocation Package"] for t in job.get("tags", [])):
         score += 12
@@ -238,16 +239,21 @@ def search_jobs():
         tasks.append(lambda k=kw: fetch_themuse(k))
     if "stepstone" in sources:
         tasks.append(lambda k=kw: fetch_stepstone(k))
+    # For Indian boards, use shorter role-focused keywords
+    india_kw = " ".join(kw.split()[:3])  # e.g. "staff premier support"
     if "naukri" in sources:
-        tasks.append(lambda k=kw: fetch_naukri(k))
+        tasks.append(lambda k=india_kw: fetch_naukri(k))
+        tasks.append(lambda k=profile_title: fetch_naukri(k))  # also try exact title
     if "iimjobs" in sources:
-        tasks.append(lambda k=kw: fetch_iimjobs(k))
+        tasks.append(lambda k=india_kw: fetch_iimjobs(k))
     if "instahyre" in sources:
-        tasks.append(lambda k=kw: fetch_instahyre(k))
+        tasks.append(lambda k=india_kw: fetch_instahyre(k))
     if "adzuna" in sources and aid and akey:
-        tasks.append(lambda k=kw: fetch_adzuna(k, aid, akey))
+        adzuna_ctries = b.get("adzuna_countries", ["nl", "de", "gb"])
+        if not adzuna_ctries: adzuna_ctries = ["nl", "de", "gb"]
+        tasks.append(lambda k=kw, c=adzuna_ctries: fetch_adzuna(k, aid, akey, c))
         if profile_title:
-            tasks.append(lambda k=profile_title: fetch_adzuna(k, aid, akey))
+            tasks.append(lambda k=profile_title, c=adzuna_ctries: fetch_adzuna(k, aid, akey, c))
     all_jobs = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         futures = [ex.submit(t) for t in tasks]
@@ -300,7 +306,8 @@ def run_agent():
         if "themuse" in srcs:
             tasks.append(lambda k=keywords: fetch_themuse(k))
         if "adzuna" in srcs and aid and akey:
-            tasks.append(lambda k=keywords: fetch_adzuna(k, aid, akey))
+            agt_ctries = b.get("adzuna_countries", ["nl", "de", "gb"]) or ["nl","de","gb"]
+            tasks.append(lambda k=keywords, c=agt_ctries: fetch_adzuna(k, aid, akey, c))
         with ThreadPoolExecutor(max_workers=6) as ex:
             futs = [ex.submit(t) for t in tasks]
             for fut in as_completed(futs, timeout=20):
