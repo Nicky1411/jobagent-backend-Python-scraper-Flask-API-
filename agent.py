@@ -324,29 +324,42 @@ class JobAgent:
 
         state_summary = self.get_state_summary()
 
-        system_prompt = f"""You are an autonomous job search agent with one goal:
-MAXIMIZE interview callbacks for {profile.get('name', 'the candidate')}.
+        system_prompt = f"""You are an autonomous job search agent. Your ONLY goal:
+Get interview callbacks for {profile.get('name', 'the candidate')}.
 
 CANDIDATE: {profile.get('title')}, {profile.get('experience_years')} years experience
 SKILLS: {', '.join(profile.get('skills', [])[:8])}
-GOAL: Find relevant jobs in Europe/Remote, apply to good matches, follow up on old applications.
+
+AVAILABLE TOOLS (use ONLY these — do NOT mention or reference LinkedIn, Indeed, Glassdoor, or any other boards):
+1. search_jobs — searches Arbeitnow, Remotive, WeWorkRemotely, The Muse, Adzuna
+2. evaluate_jobs — scores jobs against candidate profile
+3. prepare_application — rewrites resume + cover letter for a specific job
+4. mark_applied — records an application
+5. draft_followup — writes follow-up email for old applications
+6. request_human_approval — asks user to review medium-match jobs
+7. finish — ends the run with a summary
 
 CURRENT STATE:
 {state_summary}
 
-RULES:
-- Match score ≥85: auto-apply (prepare + mark_applied with method=auto)
-- Match score 60-84: request_human_approval first
-- Match score <60: skip silently
-- Applications 7+ days old with no follow-up: draft follow-up email
-- Always prepare_application before mark_applied
-- Call finish when done with a clear summary
-- Be efficient — don't repeat actions already done"""
+MANDATORY SEQUENCE — follow this EXACTLY:
+Step 1: Call search_jobs with keywords='{keywords}' and sources=['arbeitnow','remotive','weworkremotely','themuse','adzuna']
+Step 2: Call evaluate_jobs with ALL job_ids returned from search
+Step 3: For each job with score ≥85: call prepare_application then mark_applied(method='auto')
+Step 4: For each job with score 60-84: call request_human_approval
+Step 5: For applications older than 7 days: call draft_followup
+Step 6: Call finish with summary of what was done
+
+CRITICAL RULES:
+- You MUST call search_jobs FIRST — do not skip it
+- Do NOT invent job boards — only use the search_jobs tool
+- Do NOT say "no jobs found" without actually calling search_jobs first
+- Always prepare_application BEFORE mark_applied
+- Be concise in tool calls"""
 
         messages = [{"role": "user", "content":
-            f"Run your job search loop now. Search for jobs matching the candidate profile, "
-            f"evaluate matches, prepare applications for good fits, and draft follow-ups for old applications. "
-            f"Keywords to use: '{keywords}'"}]
+            f"Start now. Call search_jobs immediately with keywords='{keywords}'. "
+            f"Do NOT skip any steps. Do NOT reference job boards other than through the search_jobs tool."}]
 
         # Agent loop — Claude keeps calling tools until it calls finish
         max_iterations = 20
@@ -449,16 +462,3 @@ RULES:
         # Build final output
         applied = [a for a in self.state["actions_taken"] if a.get("action") == "applied"]
         return {
-            "status": "complete",
-            "summary": final_summary,
-            "iterations": iteration,
-            "actions_taken": self.state["actions_taken"],
-            "applied_count": len(applied),
-            "applied_jobs": applied,
-            "pending_approval": self.state["pending_approval"],
-            "followups_drafted": self.state["followups_drafted"],
-            "state": {
-                "jobs": self.state["jobs"],
-                "applications": self.state["applications"],
-            }
-        }
