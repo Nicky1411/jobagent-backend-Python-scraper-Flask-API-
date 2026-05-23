@@ -495,6 +495,12 @@ def run_agent():
         return jsonify({"error": "Profile required. Parse resume first."}), 400
 
     def search_fn(keywords, srcs):
+        # Shorten keywords if too long (>5 words)
+        kw_words = keywords.strip().split()
+        if len(kw_words) > 5:
+            keywords = " ".join(kw_words[:4])
+        log.info("Agent search_fn: keywords='{}'".format(keywords))
+
         jobs = []
         tasks = []
         if "arbeitnow" in srcs:
@@ -514,12 +520,33 @@ def run_agent():
                     jobs += fut.result(timeout=5)
                 except Exception:
                     pass
+
+        # If no results, try broader fallback keywords
+        if len(jobs) < 3:
+            log.info("Agent: 0 results, trying broader keywords")
+            broad = " ".join(kw_words[:2]) if len(kw_words) >= 2 else "senior engineer"
+            fallback_tasks = [
+                lambda k=broad: fetch_arbeitnow(k),
+                lambda k=broad: fetch_remotive(k),
+                lambda k=broad: fetch_weworkremotely(k),
+                lambda k=broad: fetch_themuse(k),
+            ]
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                futs = [ex.submit(t) for t in fallback_tasks]
+                for fut in as_completed(futs, timeout=20):
+                    try:
+                        jobs += fut.result(timeout=5)
+                    except Exception:
+                        pass
+
         jobs = dedup(jobs)
         for j in jobs:
             j["match"] = score_job(j, profile)
         jobs.sort(key=lambda j: j["match"], reverse=True)
-        jobs = claude_score_jobs(jobs, profile)
-        jobs.sort(key=lambda j: j["match"], reverse=True)
+        if jobs:
+            jobs = claude_score_jobs(jobs, profile)
+            jobs.sort(key=lambda j: j["match"], reverse=True)
+        log.info("Agent search_fn returned {} jobs".format(len(jobs)))
         return jobs
 
     def generate_fn(content_type, job, prof):
