@@ -15,6 +15,12 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9"
 }
 
+def safe_str(val, default=""):
+    """Convert any value to string safely."""
+    if val is None:
+        return default
+    return str(val).strip() or default
+
 def fetch_arbeitnow(keywords):
     results = []
     try:
