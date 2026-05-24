@@ -75,8 +75,9 @@ def score_job(job, profile):
     score = 30
     skills = [s.lower() for s in profile.get("skills", [])]
     profile_title = (profile.get("title") or "").lower()
-    title = job["title"].lower()
-    combined = title + " " + (job.get("description", "") + " ".join(job.get("tags", []))).lower()
+    title = (job.get("title") or "").lower()
+    tags_str = " ".join(t for t in job.get("tags", []) if t)
+    combined = title + " " + ((job.get("description") or "") + " " + tags_str).lower()
     matched = sum(1 for s in skills if len(s) > 3 and s.lower() in combined)
     score += min(matched * 6, 40)
     title_words = set(title.split())
@@ -93,7 +94,7 @@ def score_job(job, profile):
         score -= 20
     elif exp >= 4:
         score += 4
-    location = job.get("location", "").lower()
+    location = (job.get("location") or "").lower()
     if any(loc in location for loc in ["netherlands", "germany", "amsterdam", "berlin",
                                         "munich", "hamburg", "stockholm", "vienna",
                                         "zurich", "europe", "remote", "worldwide",
@@ -105,7 +106,7 @@ def score_job(job, profile):
         score += 12
     if any(t in ["English Only", "English Friendly"] for t in job.get("tags", [])):
         score += 10
-    return max(0, min(score, 99))
+    return int(max(0, min(score, 99)))
 
 def claude_score_jobs(jobs, profile):
     if not jobs or not profile.get("name"):
@@ -137,7 +138,7 @@ def claude_score_jobs(jobs, profile):
         for i, job in enumerate(to_score):
             if i < len(scores):
                 s = scores[i]
-                job["match"] = max(0, min(int(s.get("score", job["match"])), 99))
+                job["match"] = int(max(0, min(int(s.get("score") or job.get("match") or 50), 99)))
                 job["match_reason"] = s.get("reason", "")
                 job["match_highlight"] = s.get("highlight", "")
         log.info("Claude scored {} jobs".format(len(to_score)))
@@ -148,9 +149,15 @@ def claude_score_jobs(jobs, profile):
 def dedup(jobs):
     seen, out = set(), []
     for j in jobs:
-        k = "{}|{}".format(j["title"].lower().strip(), j["company"].lower().strip())
+        title = (j.get("title") or "").lower().strip()
+        company = (j.get("company") or "").lower().strip()
+        if not title:
+            continue  # skip jobs with no title
+        k = "{}|{}".format(title, company)
         if k not in seen:
             seen.add(k)
+            # Ensure match is always an int
+            j["match"] = int(j.get("match") or 0)
             out.append(j)
     return out
 
@@ -265,10 +272,10 @@ def search_jobs():
     all_jobs = dedup(all_jobs)
     for j in all_jobs:
         j["match"] = score_job(j, prof)
-    all_jobs.sort(key=lambda j: j["match"], reverse=True)
+    all_jobs.sort(key=lambda j: j.get("match") or 0, reverse=True)
     if prof.get("name"):
         all_jobs = claude_score_jobs(all_jobs, prof)
-        all_jobs.sort(key=lambda j: j["match"], reverse=True)
+        all_jobs.sort(key=lambda j: j.get("match") or 0, reverse=True)
     log.info("Search returned {} jobs".format(len(all_jobs)))
     return jsonify({"jobs": all_jobs, "total": len(all_jobs)})
 
@@ -337,10 +344,10 @@ def run_agent():
         jobs = dedup(jobs)
         for j in jobs:
             j["match"] = score_job(j, profile)
-        jobs.sort(key=lambda j: j["match"], reverse=True)
+        jobs.sort(key=lambda j: j.get("match") or 0, reverse=True)
         if jobs:
             jobs = claude_score_jobs(jobs, profile)
-            jobs.sort(key=lambda j: j["match"], reverse=True)
+            jobs.sort(key=lambda j: j.get("match") or 0, reverse=True)
         log.info("Agent search_fn returned {} jobs".format(len(jobs)))
         return jobs
 
@@ -424,17 +431,3 @@ def fetch_job():
         # Clean up title (often "Job Title | Company | LinkedIn")
         if " | " in title:
             parts = title.split(" | ")
-            title = parts[0].strip()
-            if len(parts) > 1:
-                company = parts[1].strip()
-        return jsonify({"description": description, "title": title, "company": company, "url": url})
-    except Exception as e:
-        log.error("fetch_job error: {}".format(e))
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print("\n{}\n  JobAgent EU Backend — port {}\n  Claude: {}\n  Sources: 6\n{}\n".format(
-        "="*45, port, "OK" if ANTHROPIC_KEY else "MISSING KEY", "="*45
-    ))
-    app.run(host="0.0.0.0", port=port, debug=False)
