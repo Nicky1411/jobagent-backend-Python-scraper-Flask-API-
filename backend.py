@@ -444,20 +444,26 @@ def fetch_job():
 def run_scheduler():
     """
     Triggered by Railway Cron or manually.
-    Runs full agent loop and sends email digest.
+    Returns immediately, runs job in background thread.
     """
-    try:
-        from scheduler import run_scheduled_job
-        result = run_scheduled_job()
-        log.info("Scheduled job complete: {}".format(result))
-        return jsonify(result)
-    except ImportError as e:
-        return jsonify({"error": "scheduler.py not found: {}".format(e)}), 500
-    except Exception as e:
-        log.error("Scheduler error: {}".format(e))
-        import traceback
-        log.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+    import threading
+    def run_in_background():
+        try:
+            from scheduler import run_scheduled_job
+            result = run_scheduled_job()
+            log.info("Scheduled job complete: {}".format(result))
+        except Exception as e:
+            log.error("Scheduler error: {}".format(e))
+            import traceback
+            log.error(traceback.format_exc())
+
+    thread = threading.Thread(target=run_in_background, daemon=True)
+    thread.start()
+    return jsonify({
+        "status": "started",
+        "message": "Scheduler running in background. Check Railway logs for progress.",
+        "logs_url": "https://railway.app — Deployments → Deploy Logs"
+    })
 
 
 @app.route("/profile/save", methods=["POST"])
