@@ -439,10 +439,78 @@ def fetch_job():
         log.error("fetch_job error: {}".format(e))
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/scheduler/run", methods=["POST", "GET"])
+def run_scheduler():
+    """
+    Triggered by Railway Cron or manually.
+    Runs full agent loop and sends email digest.
+    """
+    try:
+        from scheduler import run_scheduled_job
+        result = run_scheduled_job()
+        log.info("Scheduled job complete: {}".format(result))
+        return jsonify(result)
+    except ImportError as e:
+        return jsonify({"error": "scheduler.py not found: {}".format(e)}), 500
+    except Exception as e:
+        log.error("Scheduler error: {}".format(e))
+        import traceback
+        log.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/profile/save", methods=["POST"])
+def save_profile():
+    """Save profile + email settings and return Railway setup instructions."""
+    body = request.get_json() or {}
+    profile = body.get("profile", {})
+    recipient_email = body.get("recipient_email", "")
+    schedule_time = body.get("schedule_time", "08:00")
+    target_countries = body.get("target_countries", ["Netherlands", "Germany"])
+
+    if not profile.get("name"):
+        return jsonify({"error": "No profile provided"}), 400
+    if not recipient_email:
+        return jsonify({"error": "Email address required"}), 400
+
+    profile_json = json.dumps(profile)
+    countries_str = ",".join(target_countries) if isinstance(target_countries, list) else target_countries
+
+    # Parse schedule time into cron expression
+    try:
+        hour, minute = schedule_time.split(":")
+        cron_expr = "{} {} * * *".format(minute, hour)
+    except Exception:
+        cron_expr = "0 8 * * *"
+
+    return jsonify({
+        "success": True,
+        "recipient_email": recipient_email,
+        "schedule_time": schedule_time,
+        "cron_expr": cron_expr,
+        "profile_json": profile_json,
+        "env_vars": {
+            "STORED_PROFILE": profile_json,
+            "RECIPIENT_EMAIL": recipient_email,
+            "TARGET_COUNTRIES": countries_str,
+        },
+        "instructions": [
+            "1. Sign up free at sendgrid.com → Settings → API Keys → Create Key",
+            "2. Railway → your service → Variables → add these:",
+            "   SENDGRID_API_KEY = your SendGrid key",
+            "   SENDER_EMAIL = your verified SendGrid sender email",
+            "   STORED_PROFILE = (copy from box below)",
+            "   RECIPIENT_EMAIL = {} (already filled)".format(recipient_email),
+            "   TARGET_COUNTRIES = {} (already filled)".format(countries_str),
+            "3. Railway → Settings → Cron → Add: {}".format(cron_expr),
+            "4. Test now: POST /scheduler/run"
+        ]
+    })
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print("\n{}\n  JobAgent EU Backend — port {}\n  Claude: {}\n  Sources: 6\n{}\n".format(
         "="*45, port, "OK" if ANTHROPIC_KEY else "MISSING KEY", "="*45
     ))
     app.run(host="0.0.0.0", port=port, debug=False)
- 
