@@ -440,6 +440,33 @@ def fetch_job():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/scheduler/test", methods=["GET", "POST"])
+def test_scheduler():
+    """Test each component of the scheduler independently."""
+    results = {}
+
+    # Check env vars
+    import os
+    results["env_vars"] = {
+        "SENDGRID_API_KEY": "set" if os.environ.get("SENDGRID_API_KEY") else "MISSING",
+        "SENDER_EMAIL": os.environ.get("SENDER_EMAIL", "MISSING"),
+        "RECIPIENT_EMAIL": os.environ.get("RECIPIENT_EMAIL", "MISSING"),
+        "STORED_PROFILE": "set" if os.environ.get("STORED_PROFILE") else "MISSING",
+        "TARGET_COUNTRIES": os.environ.get("TARGET_COUNTRIES", "MISSING"),
+        "BACKEND_URL": os.environ.get("BACKEND_URL", "MISSING"),
+    }
+
+    # Test SendGrid
+    try:
+        from scheduler import send_test_email
+        email_result = send_test_email()
+        results["email_test"] = email_result
+    except Exception as e:
+        results["email_test"] = {"error": str(e)}
+
+    return jsonify(results)
+
+
 @app.route("/scheduler/run", methods=["POST", "GET"])
 def run_scheduler():
     """
