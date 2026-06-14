@@ -49,9 +49,10 @@ def call_claude(prompt, system="", max_tokens=1000):
 def extract_text_from_file(file_bytes, filename):
     ext = filename.lower().split(".")[-1]
     if ext == "pdf":
-        import fitz
-        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-            return "\n".join(page.get_text() for page in doc).strip()
+        from pypdf import PdfReader
+        from io import BytesIO
+        reader = PdfReader(BytesIO(file_bytes))
+        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
     elif ext in ["docx", "doc"]:
         from docx import Document
         from io import BytesIO
