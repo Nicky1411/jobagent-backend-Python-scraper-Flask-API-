@@ -441,24 +441,46 @@ def fetch_job():
         return jsonify({"error": str(e)}), 500
 
 
+_scheduler_status = {"running": False, "last_result": None, "last_run": None}
+
 @app.route("/scheduler/run", methods=["POST", "GET"])
 def run_scheduler():
     """
-    Triggered by Railway Cron or manually.
-    Runs full agent loop and sends email digest.
+    Triggered by Render Cron or manually.
+    Runs async in background thread — returns 202 immediately to avoid timeout.
     """
-    try:
-        from scheduler import run_scheduled_job
-        result = run_scheduled_job()
-        log.info("Scheduled job complete: {}".format(result))
-        return jsonify(result)
-    except ImportError as e:
-        return jsonify({"error": "scheduler.py not found: {}".format(e)}), 500
-    except Exception as e:
-        log.error("Scheduler error: {}".format(e))
-        import traceback
-        log.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+    import threading
+
+    if _scheduler_status["running"]:
+        return jsonify({"status": "already_running", "last_run": _scheduler_status["last_run"]}), 409
+
+    def _run():
+        _scheduler_status["running"] = True
+        try:
+            from scheduler import run_scheduled_job
+            result = run_scheduled_job()
+            _scheduler_status["last_result"] = result
+            _scheduler_status["last_run"] = datetime.now().isoformat()
+            log.info("Scheduled job complete: {}".format(result))
+        except Exception as e:
+            log.error("Scheduler error: {}".format(e))
+            import traceback
+            log.error(traceback.format_exc())
+            _scheduler_status["last_result"] = {"error": str(e)}
+        finally:
+            _scheduler_status["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "started", "message": "Scheduler running in background. Check /scheduler/status for result."}), 202
+
+
+@app.route("/scheduler/status", methods=["GET"])
+def scheduler_status():
+    return jsonify({
+        "running": _scheduler_status["running"],
+        "last_run": _scheduler_status["last_run"],
+        "last_result": _scheduler_status["last_result"],
+    })
 
 
 @app.route("/profile/save", methods=["POST"])

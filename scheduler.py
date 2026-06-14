@@ -110,7 +110,7 @@ def run_agent_search(profile, countries):
             "adzuna_app_key": os.environ.get("ADZUNA_APP_KEY", ""),
             "target_countries": countries,
         },
-        timeout=120,
+        timeout=300,
     )
     if r.status_code != 200:
         raise Exception("Agent run failed: {} {}".format(r.status_code, r.text[:200]))
